@@ -16,6 +16,9 @@ import com.falsity.actions.companion.StopFightActionHandler;
 import com.falsity.actions.companion.StopFollowActionHandler;
 import com.falsity.actions.companion.WalkToActionHandler;
 import com.falsity.actions.items.GiveItemHandler;
+import com.falsity.actions.items.GiveItemsHandler;
+import com.falsity.actions.items.ItemAssistance;
+import com.falsity.actions.items.ItemService;
 import com.falsity.ai.ApiKeyProvider;
 import com.falsity.ai.ConversationManager;
 import com.falsity.ai.GroqClient;
@@ -31,7 +34,10 @@ import com.falsity.horror.HorrorManager;
 import com.falsity.memory.MemoryManager;
 import com.falsity.memory.MemoryStorage;
 import com.falsity.personality.PersonalityManager;
+import com.falsity.world.WorldQueryHandler;
+import com.falsity.world.WorldService;
 import java.nio.file.Path;
+import java.util.Optional;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.resources.Identifier;
@@ -105,11 +111,17 @@ public class FalsityMod implements ModInitializer {
 		executor.register(new FightActionHandler());
 		executor.register(new StopFightActionHandler());
 		executor.register(new ReportThreatsActionHandler());
-		executor.register(new GiveItemHandler());
+		ItemService itemService = new ItemService();
+		executor.register(new GiveItemHandler(itemService));
+		executor.register(new GiveItemsHandler(itemService));
+		executor.register(new WorldQueryHandler());
 		executor.register(new BuildActionHandler());
 		executor.register(new StopBuildActionHandler());
 
 		conversations.setActionExecutor(executor);
+		conversations.setConfigSource(FalsityMod::config);
+		conversations.setItemCatalog(ItemAssistance.CATALOG);
+		conversations.setWorldFacts((player, falsity) -> WorldService.facts(player, falsity, config));
 
 		actions = executor;
 		confirmations = confirmationManager;
@@ -118,16 +130,48 @@ public class FalsityMod implements ModInitializer {
 
 		NaturalChatListener.register();
 
-		boolean groqReady = config.groq.enabled && new ApiKeyProvider().resolve(config, gameDir).isPresent();
 		LOGGER.info(
-			"Falsity ready ({} companions registered, debug logging {}, Groq {}).",
+			"Falsity ready ({} companions registered, debug logging {}). {}",
 			FalsityRegistries.FALSITY == null ? "no" : "one",
 			config.debugLogging ? "on" : "off",
-			groqReady ? "connected (" + config.groq.model + ")" : "offline (fallback lines)"
+			describeGroqSetup()
 		);
 	}
 
-	/** Namespaced identifier for this mod's resources. */
+	/**
+	 * What is known about Groq at startup. A key being present does not prove
+	 * that Groq works, so this never says "connected": it says what is
+	 * configured and how to check.
+	 */
+	private static String describeGroqSetup() {
+		if (!config.groq.enabled) {
+			return "Groq is disabled in the config; Falsity will use its offline lines.";
+		}
+		ApiKeyProvider.Located key = new ApiKeyProvider().locate(config, gameDir);
+		if (!key.present()) {
+			return "No Groq API key was found" + (key.note().isEmpty() ? "" : " (" + key.note() + ")")
+				+ "; Falsity will use its offline lines. Set GROQ_API_KEY, secrets.json or groq.apiKey.";
+		}
+		return "Groq is configured (model " + config.groq.model + ", key from " + key.source().description()
+			+ ") but not yet verified; run /falsity ai test to check it, and /falsity ai status to see results.";
+	}
+
+	/**
+	 * Re-reads {@code config/falsity.json} and applies it in place. Returns an
+	 * empty string on success, or a sentence explaining what went wrong; on
+	 * failure the running settings are left as they were.
+	 */
+	public static String reloadConfig() {
+		Path path = FabricLoader.getInstance().getConfigDir().resolve("falsity.json");
+		Optional<FalsityConfig> loaded = FalsityConfig.read(path);
+		if (loaded.isEmpty()) {
+			return "Could not read " + path.getFileName() + "; the current settings were kept. See the server log.";
+		}
+		config.copyFrom(loaded.get());
+		LOGGER.info("Falsity settings reloaded. {}", describeGroqSetup());
+		return "";
+	}
+
 	public static Identifier id(String path) {
 		return Identifier.fromNamespaceAndPath(MOD_ID, path);
 	}
@@ -194,6 +238,10 @@ public class FalsityMod implements ModInitializer {
 		}
 		if (confirmations != null) {
 			confirmations.expire();
+		}
+		if (conversations != null) {
+			// Releases messages that were waiting for their turn.
+			conversations.tick();
 		}
 	}
 

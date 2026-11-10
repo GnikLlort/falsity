@@ -2,6 +2,7 @@ package com.falsity.command;
 
 import com.falsity.FalsityMod;
 import com.falsity.FalsityRegistries;
+import com.falsity.ai.AiStatusReport;
 import com.falsity.ai.ConversationManager;
 import com.falsity.entity.FalsityEntity;
 import com.falsity.horror.HorrorStage;
@@ -46,6 +47,8 @@ public final class FalsityCommands {
 					.then(memoryCommand())
 					.then(personalityCommand())
 					.then(horrorCommand())
+					.then(aiCommand())
+					.then(reloadCommand())
 			)
 		);
 	}
@@ -102,6 +105,79 @@ public final class FalsityCommands {
 						.executes(FalsityCommands::setHorror))));
 	}
 
+	/** {@code /falsity ai status} and {@code /falsity ai test}: is Groq actually working? */
+	private static LiteralArgumentBuilder<CommandSourceStack> aiCommand() {
+		return Commands.literal("ai")
+			.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_MODERATOR))
+			.executes(FalsityCommands::aiStatus)
+			.then(Commands.literal("status").executes(FalsityCommands::aiStatus))
+			.then(Commands.literal("test").executes(FalsityCommands::aiTest));
+	}
+
+	/** {@code /falsity reload}: re-reads config/falsity.json without a restart. */
+	private static LiteralArgumentBuilder<CommandSourceStack> reloadCommand() {
+		return Commands.literal("reload")
+			.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_MODERATOR))
+			.executes(FalsityCommands::reload);
+	}
+
+	private static int aiStatus(CommandContext<CommandSourceStack> context) {
+		CommandSourceStack source = context.getSource();
+		if (FalsityMod.conversations() == null) {
+			source.sendFailure(Component.translatable("message.falsity.unavailable"));
+			return 0;
+		}
+		for (String line : AiStatusReport.lines(
+			FalsityMod.config(),
+			FalsityMod.conversations().locateKey(),
+			FalsityMod.conversations().groq().status(),
+			FalsityMod.conversations().waitingCount(),
+			System.currentTimeMillis()
+		)) {
+			source.sendSuccess(() -> Component.literal(line), false);
+		}
+		return 1;
+	}
+
+	private static int aiTest(CommandContext<CommandSourceStack> context) {
+		CommandSourceStack source = context.getSource();
+		if (FalsityMod.conversations() == null) {
+			source.sendFailure(Component.translatable("message.falsity.unavailable"));
+			return 0;
+		}
+		if (!FalsityMod.config().groq.enabled) {
+			source.sendFailure(Component.literal("Groq is disabled (groq.enabled is false in config/falsity.json)."));
+			return 0;
+		}
+		if (!FalsityMod.conversations().locateKey().present()) {
+			source.sendFailure(Component.literal(AiStatusReport.keyLine(FalsityMod.conversations().locateKey())));
+			return 0;
+		}
+
+		source.sendSuccess(() -> Component.literal("Asking Groq for one short reply..."), false);
+		FalsityMod.conversations().testConnection().whenComplete((exchange, error) ->
+			source.getServer().execute(() -> {
+				String report = AiStatusReport.testResult(exchange, error);
+				if (error == null && exchange != null && exchange.diagnostics().success()) {
+					source.sendSuccess(() -> Component.literal(report), false);
+				} else {
+					source.sendFailure(Component.literal(report));
+				}
+			}));
+		return 1;
+	}
+
+	private static int reload(CommandContext<CommandSourceStack> context) {
+		CommandSourceStack source = context.getSource();
+		String problem = FalsityMod.reloadConfig();
+		if (!problem.isEmpty()) {
+			source.sendFailure(Component.literal(problem));
+			return 0;
+		}
+		source.sendSuccess(() -> Component.literal("Falsity's settings were reloaded from config/falsity.json."), true);
+		return 1;
+	}
+
 	private static int summon(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
 		CommandSourceStack source = context.getSource();
 		ServerLevel level = source.getLevel();
@@ -154,7 +230,8 @@ public final class FalsityCommands {
 
 		ConversationManager.Outcome outcome = FalsityMod.conversations().requestConversation(player, falsity, message);
 		switch (outcome) {
-			case ACCEPTED -> {
+			case ACCEPTED, QUEUED -> {
+				// Answered, on its way, or waiting its turn; the reply follows.
 				return 1;
 			}
 			case DISABLED -> {
@@ -214,6 +291,9 @@ public final class FalsityCommands {
 
 		UUID targetId = target.getUUID();
 		FalsityMod.memories().clear(targetId);
+		if (FalsityMod.conversations() != null) {
+			FalsityMod.conversations().history().clear(targetId);
+		}
 		context.getSource().sendSuccess(() -> Component.translatable("command.falsity.memory_cleared", target.getName().getString()), true);
 		return 1;
 	}

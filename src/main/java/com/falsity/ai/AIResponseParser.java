@@ -35,6 +35,8 @@ public final class AIResponseParser {
 	private static final Pattern JSON_ACTION_LINE =
 		Pattern.compile("(?m)^\\s*ACTION:\\s*(\\{[^{}]*\\})\\s*$", Pattern.DOTALL);
 	private static final Pattern LEGACY_ACTION_TAG = Pattern.compile("\\[action:([a-z_]+)\\]");
+	private static final Pattern THINK_BLOCK =
+		Pattern.compile("<think>.*?</think>", Pattern.DOTALL | Pattern.CASE_INSENSITIVE);
 
 	private AIResponseParser() {
 	}
@@ -63,7 +65,7 @@ public final class AIResponseParser {
 			return Optional.empty();
 		}
 
-		String text = rawContent.trim();
+		String text = stripReasoning(rawContent).trim();
 		if (text.isEmpty()) {
 			return Optional.empty();
 		}
@@ -110,6 +112,45 @@ public final class AIResponseParser {
 	 * Parses and validates one JSON action object. Returns empty for anything
 	 * malformed, for unknown types, or for arguments the type does not allow.
 	 */
+	/**
+	 * The structured action in a reply, even when the reply is nothing but the
+	 * tag. A model that answers "follow me" with only {@code [action:{...}]}
+	 * still meant the action; the handler's own message becomes the dialogue.
+	 */
+	public static Optional<ActionRequest> extractAction(String rawContent) {
+		if (rawContent == null) {
+			return Optional.empty();
+		}
+		String text = stripReasoning(rawContent);
+		Matcher jsonTag = JSON_ACTION_TAG.matcher(text);
+		if (jsonTag.find()) {
+			return parseActionJson(jsonTag.group(1));
+		}
+		Matcher jsonLine = JSON_ACTION_LINE.matcher(text);
+		if (jsonLine.find()) {
+			return parseActionJson(jsonLine.group(1));
+		}
+		return Optional.empty();
+	}
+
+	/**
+	 * Removes a reasoning model's thinking from the visible reply. Some models
+	 * put it in the content as {@code <think>...</think>}; players must never
+	 * see it.
+	 */
+	static String stripReasoning(String rawContent) {
+		if (rawContent == null) {
+			return "";
+		}
+		String text = THINK_BLOCK.matcher(rawContent).replaceAll(" ");
+		int open = text.toLowerCase(java.util.Locale.ROOT).indexOf("<think>");
+		if (open >= 0) {
+			// Unterminated: the reply was cut off while still thinking.
+			text = text.substring(0, open);
+		}
+		return text;
+	}
+
 	static Optional<ActionRequest> parseActionJson(String json) {
 		if (json == null || json.isBlank()) {
 			return Optional.empty();
