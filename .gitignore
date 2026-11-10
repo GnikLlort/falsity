@@ -39,3 +39,7 @@ secrets.json
 # Local test artefacts produced by tools/
 tools/.cache/
 tools/out/
+
+# Python tooling
+__pycache__/
+*.pyc
