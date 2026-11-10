@@ -50,6 +50,14 @@ public class FalsityEntity extends PathfinderMob {
 	 */
 	private String ownerId = "";
 
+	/**
+	 * The owner this session resolved, kept to avoid a level lookup every tick.
+	 *
+	 * <p>It is a cache, not state: the saved UUID is the truth, and this is
+	 * dropped whenever the player leaves the level or the entity is reloaded.
+	 */
+	private Player cachedOwner;
+
 	/** Ticks left before Falsity may catch up with its owner again. */
 	private int catchUpCooldown;
 	/** Ticks left of the current greeting, used to stop it repeating. */
@@ -86,6 +94,14 @@ public class FalsityEntity extends PathfinderMob {
 	}
 
 	public Optional<Player> getOwner() {
+		if (this.cachedOwner != null) {
+			if (this.cachedOwner.isRemoved() || this.cachedOwner.level() != this.level()) {
+				this.cachedOwner = null;
+			} else {
+				return Optional.of(this.cachedOwner);
+			}
+		}
+
 		return getOwnerUuid().map(uuid -> this.level().getPlayerByUUID(uuid));
 	}
 
@@ -96,6 +112,7 @@ public class FalsityEntity extends PathfinderMob {
 	/** Bonds Falsity to a player. Called on the server only. */
 	public void bondTo(Player player) {
 		this.ownerId = player.getUUID().toString();
+		this.cachedOwner = player;
 		this.setPersistenceRequired();
 		FalsityMod.debug("Falsity bonded to {}", player.getName().getString());
 	}
@@ -287,6 +304,7 @@ public class FalsityEntity extends PathfinderMob {
 	protected void readAdditionalSaveData(ValueInput input) {
 		super.readAdditionalSaveData(input);
 		this.ownerId = input.getStringOr("Owner", "");
+		this.cachedOwner = null;
 		setSitting(input.getBooleanOr("Sitting", false));
 		this.catchUpCooldown = input.getIntOr("CatchUpCooldown", 0);
 	}

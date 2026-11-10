@@ -110,18 +110,29 @@ public class FalsityGameTest {
 	public void falsityWalksTowardsItsOwner(final GameTestHelper helper) {
 		ServerLevel level = helper.getLevel();
 
-		// A little stone floor, so there is somewhere to path.
-		for (int x = 0; x < 5; x++) {
-			for (int z = 0; z < 5; z++) {
+		// A stone walkway long enough that Falsity can close the follow distance
+		// with a real path, not just step off the edge of a small platform.
+		for (int x = 0; x <= 12; x++) {
+			for (int z = 1; z <= 3; z++) {
 				helper.setBlock(x, 0, z, Blocks.STONE);
 			}
 		}
+
+		helper.assertTrue(
+			level.getBlockState(helper.absolutePos(new BlockPos(12, 0, 2))).is(Blocks.STONE),
+			"The game test walkway could not be built, so walking cannot be measured"
+		);
 
 		FalsityEntity falsity = spawn(helper);
 		Player owner = helper.makeMockPlayer(GameType.SURVIVAL);
 		Vec3 here = Vec3.atCenterOf(helper.absolutePos(SPAWN));
 		owner.snapTo(here.x + 8.0, here.y, here.z);
 		falsity.bondTo(owner);
+
+		helper.assertTrue(
+			falsity.getOwner().isPresent(),
+			"Falsity should resolve the player it bonded with"
+		);
 
 		double startDistance = falsity.distanceToSqr(owner);
 
