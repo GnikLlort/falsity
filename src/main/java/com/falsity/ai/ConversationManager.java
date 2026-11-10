@@ -24,6 +24,7 @@ import java.util.UUID;
 import java.util.function.LongSupplier;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -293,11 +294,16 @@ public final class ConversationManager {
 		if (action == null || !action.type().isReal() || this.executor == null) {
 			return null;
 		}
+		// Actions run server-side and need a ServerPlayer; conversations are
+		// only ever started by one, so anything else simply gets no action.
+		if (!(player instanceof ServerPlayer serverPlayer)) {
+			return null;
+		}
 		ServerLevel level = falsity.level() instanceof ServerLevel serverLevel ? serverLevel : null;
 		if (level == null) {
 			return null;
 		}
-		ActionContext context = new ActionContext(player, falsity, level, this.config);
+		ActionContext context = new ActionContext(serverPlayer, falsity, level, this.config);
 		return this.executor.execute(context, action);
 	}
 
