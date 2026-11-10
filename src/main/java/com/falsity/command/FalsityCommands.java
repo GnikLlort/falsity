@@ -294,7 +294,9 @@ public final class FalsityCommands {
 			position.x - TALK_RANGE, position.y - TALK_RANGE, position.z - TALK_RANGE,
 			position.x + TALK_RANGE, position.y + TALK_RANGE, position.z + TALK_RANGE
 		);
-		List<Entity> nearby = level.getEntities(null, box, entity ->
+		// The cast picks the (except, aabb, predicate) overload; without it
+		// the null would also match the entity-type-test overload.
+		List<Entity> nearby = level.getEntities((Entity) null, box, entity ->
 			entity instanceof FalsityEntity falsity && falsity.isBondedTo(player.getUUID()));
 
 		List<FalsityEntity> candidates = new ArrayList<>();
