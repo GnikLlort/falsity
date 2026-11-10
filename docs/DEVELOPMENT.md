@@ -204,7 +204,10 @@ What a green run proves:
 
 - both source sets compile against real 26.3 classes,
 - the pure logic tests pass (Groq parsing/failures, AI validation, fallback,
-  memory, personality, horror, cooldowns, key resolution, prompts, config),
+  memory, personality, horror, cooldowns, key resolution, prompts, config,
+  natural-chat detection, offline intent recognition, action allowlist +
+  executor routing, confirmation flow, warm-context tracking, item-name
+  normalisation, build progress),
 - a real dedicated server loads the mod, spawns Falsity, ticks it, bonds it to a
   player, obeys sit/follow, measures it walking towards its owner, creates and
   persists memory, evolves personality, caps horror progression, and answers
@@ -263,6 +266,14 @@ and they are what the code relies on:
   resolves an owner through the level must be able to work from a cached player
   reference for a test to be able to drive it (that is why `FalsityEntity#getOwner`
   caches the player it bonded with).
+- **Registry lookups** — 26.3 has `Identifier.fromNamespaceAndPath(ns, path)`
+  (the 1.21.x Yarn name was `Identifier.of`), which means 26.3 Yarn uses more
+  natural names than 1.21.x. Consistent with that, `Registry.getOptional(id)`
+  and `ItemStack.getMaxStackSize()` are used in the new action/building code —
+  these are the 1.21.x Mojang names. If the first build reports
+  `cannot find symbol` for either, switch to the Yarn equivalents
+  (`getOptionalValue(id)` and `getMaxCount()` respectively); the reverse also
+  applies. One-line fixes either way.
 
 ## Adding behaviour
 
@@ -283,7 +294,7 @@ and they are what the code relies on:
 5. Update `docs/ARCHITECTURE.md` if the structure changed, and
    `docs/ROADMAP.md` if a milestone moved.
 
-## Known limitations (Milestone 2)
+## Known limitations (Milestone 3)
 
 - Groq models are retired without much notice. If conversations stop working
   but offline lines still arrive, check the model id in the Groq console.
@@ -295,6 +306,20 @@ and they are what the code relies on:
   `remember...`). It is not NLP and will miss phrasings it does not know.
 - Horror is capped at Strange: staring and odd recollections only. The
   director, stalking and transformation are later milestones.
+- Item assistance resolves vanilla `minecraft:` ids only; modded items are not
+  looked up. The name is normalised (plural/synonym/case) but a modded item id
+  will not resolve.
+- Building places whole blocks from a small structure library (house, castle,
+  wall, fence, farm, platform, tower, …). It is not a general-purpose schematic
+  importer.
+- **Build status on this branch:** the sandbox that produced this branch has no
+  access to the Maven/Fabric dependency repositories and no `javac`, so
+  `./gradlew build` could not be run here. The source is syntactically valid and
+  the pure-logic classes were reviewed against the 26.3 API notes above; the
+  unit tests in `src/test` cover the new pure logic (chat detection, intent
+  recognition, the action allowlist/executor, confirmations, warm context,
+  item-name normalisation, build progress). Run `./gradlew build` in an
+  environment with the dependencies reachable to produce and verify the jar.
 - No sounds yet: Falsity is silent apart from chat lines.
 
 ## Style

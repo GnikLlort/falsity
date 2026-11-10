@@ -40,6 +40,10 @@ public final class FalsityConfig {
 	public final Memory memory = new Memory();
 	public final Personality personality = new Personality();
 	public final Horror horror = new Horror();
+	public final Chat chat = new Chat();
+	public final Items items = new Items();
+	public final Building building = new Building();
+	public final Autonomy autonomy = new Autonomy();
 
 	public static final class Companion {
 		/** Whether Falsity follows the player it has bonded with. */
@@ -151,6 +155,92 @@ public final class FalsityConfig {
 		public boolean allowUnsettlingLines = true;
 	}
 
+	/**
+	 * Natural-chat behaviour.
+	 *
+	 * <p>Falsity listens to ordinary player chat, so no command is needed to
+	 * talk to it. A message is only answered when it addresses Falsity by name
+	 * or continues a conversation that is still warm. That keeps ordinary
+	 * chatter from being forwarded to Groq and keeps other players'
+	 * conversations private.
+	 */
+	public static final class Chat {
+		/** Master switch. When off, Falsity only answers through {@code /falsity talk}. */
+		public boolean enabled = true;
+		/** Seconds a contextual conversation stays warm after the last message. */
+		public int contextTimeoutSeconds = 120;
+		/** How far away a bonded Falsity may be and still hear the player. */
+		public double maxConversationDistance = 32.0;
+		/** Longest accepted message, in characters. */
+		public int maxMessageLength = 256;
+	}
+
+	/**
+	 * Item-assistance permissions.
+	 *
+	 * <p>Whether Falsity may conjure an item is decided here, never by the AI:
+	 * the model can ask, but the server checks the mode, the quantity, the
+	 * player's level and the per-player cooldown before anything is created.
+	 */
+	public static final class Items {
+		/** Master switch for item assistance. */
+		public boolean enabled = true;
+		/** Who may ask Falsity to create an item. */
+		public ItemPermissionMode permissionMode = ItemPermissionMode.OWNER;
+		/** Largest number of a single item one request may create. */
+		public int maxPerRequest = 64;
+		/** Seconds between item requests for the same player. */
+		public int cooldownSeconds = 15;
+		/** Requests larger than this ask for confirmation first. */
+		public int confirmAboveCount = 128;
+	}
+
+	/**
+	 * Building behaviour and safeguards.
+	 *
+	 * <p>Builds are planned, validated and executed server-side. The AI never
+	 * places a block directly: it produces a structured plan, the server checks
+	 * it against these limits, and only then are blocks placed gradually.
+	 */
+	public static final class Building {
+		/** Master switch. */
+		public boolean enabled = true;
+		/** Largest allowed width, length or height of a structure, in blocks. */
+		public int maxDimension = 32;
+		/** Largest number of blocks one structure may place. */
+		public int maxBlocks = 500;
+		/** Block placements performed per server tick while building. */
+		public int blockPlacementsPerTick = 6;
+		/** Whether large or destructive builds must be confirmed first. */
+		public boolean requireConfirmation = true;
+		/** Builds larger than this many blocks ask for confirmation first. */
+		public int confirmAboveBlocks = 150;
+		/** Consume the player's own materials instead of generating them. */
+		public boolean inventoryBased = true;
+		/** Allow generating materials (creative/server-authorised). */
+		public boolean creativeGeneration = false;
+		/** How far from the player a build may start, in blocks. */
+		public int maxDistanceFromPlayer = 48;
+		/** How often a progress update is sent, in ticks. */
+		public int progressUpdateTicks = 100;
+	}
+
+	/**
+	 * Autonomous behaviour switches.
+	 *
+	 * <p>Each is off by default where it could change the world in a way the
+	 * player did not ask for. Combat assistance is opt-in because it makes
+	 * Falsity attack hostile mobs.
+	 */
+	public static final class Autonomy {
+		/** Exploration: identify nearby threats and landmarks when asked. */
+		public boolean exploration = true;
+		/** Combat: help attack hostile mobs near the owner. */
+		public boolean combatAssistance = true;
+		/** Resource assistance: collect or retrieve permitted items. */
+		public boolean resourceAssistance = true;
+	}
+
 	/** Reads the configuration, falling back to defaults if the file is unusable. */
 	public static FalsityConfig load(Path path) {
 		FalsityConfig config = new FalsityConfig();
@@ -256,6 +346,24 @@ public final class FalsityConfig {
 		horror.progressionSpeed = clamp(horror.progressionSpeed, 0.0, 10.0);
 		// This milestone never allows more than the first step beyond innocence.
 		horror.maxStage = clampInt(horror.maxStage, 0, 1);
+
+		chat.contextTimeoutSeconds = clampInt(chat.contextTimeoutSeconds, 0, 3600);
+		chat.maxConversationDistance = clamp(chat.maxConversationDistance, 4.0, 256.0);
+		chat.maxMessageLength = clampInt(chat.maxMessageLength, 16, 1024);
+
+		if (items.permissionMode == null) {
+			items.permissionMode = ItemPermissionMode.OWNER;
+		}
+		items.maxPerRequest = clampInt(items.maxPerRequest, 1, 512);
+		items.cooldownSeconds = clampInt(items.cooldownSeconds, 0, 600);
+		items.confirmAboveCount = clampInt(items.confirmAboveCount, 0, 4096);
+
+		building.maxDimension = clampInt(building.maxDimension, 2, 128);
+		building.maxBlocks = clampInt(building.maxBlocks, 1, 5000);
+		building.blockPlacementsPerTick = clampInt(building.blockPlacementsPerTick, 1, 64);
+		building.confirmAboveBlocks = clampInt(building.confirmAboveBlocks, 0, 5000);
+		building.maxDistanceFromPlayer = clampInt(building.maxDistanceFromPlayer, 4, 256);
+		building.progressUpdateTicks = clampInt(building.progressUpdateTicks, 10, 6000);
 	}
 
 	private static double clamp(double value, double minimum, double maximum) {

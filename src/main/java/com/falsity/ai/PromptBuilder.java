@@ -84,7 +84,12 @@ public final class PromptBuilder {
 
 		builder.append("Reply in 1-2 short sentences, in character, as if speaking in Minecraft chat. ");
 		builder.append("Never output commands, code or instructions. Never mention being an AI or a language model. ");
-		builder.append("If you want Falsity to sit, follow or greet, end your reply with exactly one of: [action:sit] [action:follow] [action:greet]. ");
+		builder.append("You may ask Falsity to perform at most one action. To do so, end your reply with exactly one JSON action object in square brackets, for example [action:{\"type\":\"follow\"}], [action:{\"type\":\"give_item\",\"item\":\"diamond\",\"count\":32}] or [action:{\"type\":\"build\",\"structure\":\"house\",\"material\":\"oak\"}]. ");
+		builder.append("Allowed types are: follow, stop_follow, come, sit, stand, greet, look_at, walk_to, stay, protect, fight, stop_fight, report_threats, give_item, build, stop_build. ");
+		builder.append("give_item takes the keys item and count; build takes structure and material. ");
+		builder.append("Only request an action when it is safe and permitted, and never invent an item id or a dangerous block. ");
+		builder.append("If you cannot do something, say so in dialogue and request no action. ");
+		builder.append("If you want Falsity to sit, follow or greet, you may also use the short tags [action:sit] [action:follow] [action:greet]. ");
 		builder.append("Otherwise, reply with dialogue only.");
 
 		String prompt = builder.toString();

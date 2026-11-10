@@ -12,8 +12,10 @@ import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.AnimationState;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.PathfinderMob;
 import net.minecraft.world.entity.Pose;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.storage.ValueInput;
@@ -69,6 +71,10 @@ public class FalsityEntity extends PathfinderMob {
 	private int stareTicksLeft;
 	/** Ticks left before Falsity may stare again. */
 	private int stareCooldownTicks;
+	/** Whether Falsity is currently helping its owner in combat. */
+	private boolean combatEnabled;
+	/** Ticks left before Falsity may attack its combat target again. */
+	private int combatCooldownTicks;
 
 	public FalsityEntity(EntityType<? extends FalsityEntity> entityType, Level level) {
 		super(entityType, level);
@@ -163,6 +169,50 @@ public class FalsityEntity extends PathfinderMob {
 		if (sitting) {
 			this.getNavigation().stop();
 		}
+	}
+
+	// ----------------------------------------------------------------------
+	// Requested actions (server-authoritative)
+	// ----------------------------------------------------------------------
+
+	/** Whether Falsity is currently allowed to fight for its owner. */
+	public boolean isCombatEnabled() {
+		return this.combatEnabled;
+	}
+
+	/** Arms or disarms combat assistance. Called by the action handlers. */
+	public void setCombatEnabled(boolean enabled) {
+		this.combatEnabled = enabled;
+		if (!enabled) {
+			this.setTarget(null);
+		}
+	}
+
+	/** Turns to look at a position. */
+	public void lookAt(Vec3 position) {
+		this.getLookControl().setLookAt(position.x, position.y, position.z, 10.0F, this.getMaxHeadXRot());
+	}
+
+	/** Walks to a position, standing up first if it was sitting. */
+	public void walkTo(Vec3 position) {
+		this.setSitting(false);
+		this.getNavigation().setTarget(position.x, position.y, position.z);
+	}
+
+	/** Stops walking and stays exactly where it is. */
+	public void stay() {
+		this.getNavigation().stop();
+	}
+
+	/**
+	 * Comes to the player, arriving on open ground a couple of blocks away.
+	 * This is the same catch-up the entity uses when it is left behind, so it
+	 * cannot be used to push Falsity into a wall.
+	 */
+	public void comeTo(Player player) {
+		Vec3 target = findSpotNear(player);
+		this.getNavigation().stop();
+		this.teleportTo(target.x, target.y, target.z);
 	}
 
 	// ----------------------------------------------------------------------
@@ -326,6 +376,51 @@ public class FalsityEntity extends PathfinderMob {
 
 		catchUpWithOwnerIfNeeded();
 		tickStaring();
+		tickCombat();
+		tickBuilds();
+		FalsityMod.expireIdleState();
+	}
+
+	/** Advances the owner's active build, if one is running. */
+	private void tickBuilds() {
+		if (FalsityMod.builds() == null) {
+			return;
+		}
+		getOwner().ifPresent(owner -> FalsityMod.builds().tick(owner.getUUID()));
+	}
+
+	/**
+	 * Combat assistance: when armed, Falsity closes on its target and attacks
+	 * it on a cooldown. It only ever acts on a target the server set for it and
+	 * never attacks players. Disarming clears the target immediately.
+	 */
+	private void tickCombat() {
+		if (this.combatCooldownTicks > 0) {
+			this.combatCooldownTicks--;
+		}
+
+		if (!this.combatEnabled || this.isSitting()) {
+			return;
+		}
+
+		LivingEntity target = this.getTarget();
+		if (target == null || !target.isAlive() || target.level() != this.level()) {
+			return;
+		}
+
+		if (this.distanceToSqr(target) > 36.0) {
+			this.getNavigation().moveTo(target, 1.0);
+			return;
+		}
+
+		this.getLookControl().setLookAt(target, 10.0F, this.getMaxHeadXRot());
+		if (this.combatCooldownTicks > 0) {
+			return;
+		}
+
+		this.combatCooldownTicks = 20;
+		float damage = (float) this.getAttribute(Attributes.ATTACK_DAMAGE).getValue();
+		target.hurt(this.damageSources().mobAttack(this), damage);
 	}
 
 	/**
