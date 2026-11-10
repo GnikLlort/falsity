@@ -101,10 +101,20 @@ class PlayerMemoryTest {
 
 	@Test
 	void daysSinceSeenCountsCorrectly() {
-		PlayerMemory memory = new PlayerMemory("uuid-1", "Steve", 0L);
 		long day = 24L * 60L * 60L * 1000L;
+		long metAt = 1000L;
+		PlayerMemory memory = new PlayerMemory("uuid-1", "Steve", metAt);
 
-		assertEquals(0L, memory.daysSinceSeen(0L));
-		assertEquals(3L, memory.daysSinceSeen(3L * day + 1000L));
+		assertEquals(0L, memory.daysSinceSeen(metAt));
+		assertEquals(3L, memory.daysSinceSeen(metAt + 3L * day + 1000L));
+	}
+
+	@Test
+	void neverSeenPlayerHasNoAbsence() {
+		// A memory with no timestamp means "not seen yet", not "seen at the
+		// epoch", so the absence is unknown rather than fifty years.
+		PlayerMemory memory = new PlayerMemory("uuid-1", "Steve", 0L);
+
+		assertEquals(0L, memory.daysSinceSeen(1_000_000L));
 	}
 }

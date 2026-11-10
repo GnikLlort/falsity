@@ -1,6 +1,5 @@
 package com.falsity.ai;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -45,7 +44,10 @@ class ConversationCooldownTest {
 		assertFalse(manager.tryStartRequest(player, clock.get()), "Still cooling down at 5s");
 		clock.set(10_000L);
 		assertTrue(manager.tryStartRequest(player, clock.get()), "Cooldown must expire at 10s");
-		assertEquals(0L, manager.cooldownRemainingSeconds(player));
+		assertTrue(
+			manager.cooldownRemainingSeconds(player) > 0L,
+			"An accepted request starts a fresh cooldown, so the next one must wait again"
+		);
 	}
 
 	@Test

@@ -56,6 +56,10 @@ jobs:
           ./gradlew test --stacktrace 2>&1 | tee -a "$GITHUB_WORKSPACE/build.log"
           grep -h -o 'tests="[0-9]*" skipped="[0-9]*" failures="[0-9]*" errors="[0-9]*"' \
             build/test-results/test/*.xml | tee -a "$GITHUB_WORKSPACE/build.log"
+          # Name the failing tests explicitly: a bare "tests completed, N
+          # failed" line says nothing about which test broke.
+          python3 scripts/report_test_failures.py build/test-results/test \
+            | tee -a "$GITHUB_WORKSPACE/build.log"
 
       # This also runs the server game tests: Loom wires them into `build`.
       - name: Build and run game tests
@@ -94,6 +98,9 @@ jobs:
             echo "== unit test results =="
             grep -h -o 'tests="[0-9]*" skipped="[0-9]*" failures="[0-9]*" errors="[0-9]*"' \
               build/test-results/test/*.xml 2>/dev/null || echo "no unit test result files"
+            echo
+            echo "== failed unit tests =="
+            grep -E "^(FAILED|  )" build.log | grep -A1 -E "^FAILED" | head -40 || echo "none"
             echo
             echo "== game tests =="
             grep -i -E "tests are now running|GAME TESTS COMPLETE|required tests|tests failed" build.log | head -20
