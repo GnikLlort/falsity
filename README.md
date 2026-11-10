@@ -1,4 +1,4 @@
-# Falsity
+# Falsity 0.2.1
 
 An original AI horror companion for **Minecraft Java 26.3**, built with **Fabric**.
 
@@ -28,8 +28,11 @@ that is the rest of this project.
 | Idle animation (breathing, ear sway, tail flick) | Yes — vanilla keyframe animation |
 | Walk animation, head tracking, blinking | Yes — procedural, driven by the render state |
 | Spawning | Spawn egg (creative *Spawn Eggs* tab) and `/falsity summon` |
-| Bonding, petting, sit/follow orders | Yes — server-authoritative |
-| Groq conversations (`/falsity talk`) | Yes — async, server-side, with cooldowns and rate limits |
+| Bonding and petting | Yes — server-authoritative; held-use packet spam is suppressed |
+| Natural chat and sit/follow/come/stay orders | Yes — address Falsity by name; recent follow-ups retain player-isolated context |
+| Item requests | Yes — exact items plus food, armour, weapons, tools, mining, building, lighting, transport, farming, redstone and survival categories |
+| Building | Yes — bounded plans, confirmation, materials, progressive placement, progress and cancellation |
+| Groq conversations (`/falsity talk`) | Yes — async, server-side, with deterministic action fallback, cooldowns and rate limits |
 | Offline fallback personality | Yes — Falsity always answers, even with no key or no network |
 | Persistent per-player memory | Yes — `falsity-memory/<uuid>.json`, isolated per player |
 | Evolving personality (9 traits) | Yes — persists per player, drifts with interactions |
@@ -85,6 +88,10 @@ In game, either
 
 Then:
 
+- **Chat naturally** — say `Falsity, come here`, `Falsity?`, `Falcity, follow me`, or continue a recent conversation without repeating its name. Replies are private to the addressing player; ordinary multiplayer chat is ignored.
+- **Request supplies** — for example `Falsity, give me food`, `I need a full set of armour`, `give me 64 torches`, or `give me diamond tools`. Item permissions and limits remain server-controlled.
+- **Request a build** — for example `Falsity, build a small wooden house`. Falsity describes plans that require confirmation, validates the area and materials, places progressively, and accepts `stop building`.
+- **Give movement orders** — `come here`, `follow me`, `stay here`, `sit down`, `stand up`, and `stop following me` all work through normal chat.
 - **Right-click Falsity** — the first player to do so bonds with it.
 - **Shift + right-click** — tell it to stay, or to follow again.
 - **Right-click while bonded** — pet it; it heals slightly and plays its greeting.

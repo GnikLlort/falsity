@@ -12,6 +12,11 @@ class ChatDetectorTest {
 
 	@Test
 	void mentionsNameAsWholeWord() {
+		assertTrue(ChatDetector.mentions("Falsity?", NAME));
+		assertTrue(ChatDetector.mentions("Falsity!", NAME));
+		assertTrue(ChatDetector.mentions("Falsity, hello", NAME));
+		assertTrue(ChatDetector.mentions("Falcity, come here", NAME), "narrow common misspelling");
+		assertFalse(ChatDetector.mentions("The falcon is nearby", NAME));
 		assertTrue(ChatDetector.mentions("Hey Falsity, how are you?", NAME));
 		assertTrue(ChatDetector.mentions("Falsity, come here.", NAME));
 		assertTrue(ChatDetector.mentions("Can you come here, Falsity?", NAME));

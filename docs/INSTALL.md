@@ -17,8 +17,8 @@ The jar is written to:
 build/libs/falsity-<version>.jar
 ```
 
-`<version>` is the value of `version` in `gradle.properties` (currently `0.2.0`),
-so the file is `build/libs/falsity-0.2.0.jar`.
+`<version>` is the value of `version` in `gradle.properties` (currently `0.2.1`),
+so the file is `build/libs/falsity-0.2.1.jar`.
 
 `./gradlew build` compiles the mod, runs the unit tests, runs the server-side
 game tests, and produces the jar. If any test fails the build stops and no jar

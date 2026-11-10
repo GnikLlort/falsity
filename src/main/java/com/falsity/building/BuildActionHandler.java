@@ -52,7 +52,10 @@ public final class BuildActionHandler implements ActionHandler {
 			return ActionResult.failure(error.get());
 		}
 
-		if (config.building.requireConfirmation && plan.totalBlocks() > config.building.confirmAboveBlocks) {
+		// World modification is always explicit when confirmation is enabled;
+		// confirmAboveBlocks is retained for configurations that opt out of the
+		// universal prompt in a future policy, not as a safety bypass.
+		if (config.building.requireConfirmation) {
 			ConfirmationManager confirmations = FalsityMod.confirmations();
 			if (confirmations == null) {
 				return ActionResult.failure("I'm not sure I should do that.");
@@ -60,8 +63,13 @@ public final class BuildActionHandler implements ActionHandler {
 			String question = "I'll build " + plan.describe() + " here. Should I start?";
 			confirmations.request(context.player().getUUID(), question, () -> {
 				BuildManager builds = FalsityMod.builds();
-				if (builds == null) {
-					return ActionResult.failure("I'm not sure I should do that.");
+				if (builds == null || context.player().isRemoved() || !context.player().isAlive()
+					|| context.falsity().isRemoved() || !context.falsity().isBondedTo(context.player().getUUID())) {
+					return ActionResult.failure("I can't safely start that build now.");
+				}
+				Optional<String> changed = BuildValidator.validate(plan, context.level(), context.player(), config);
+				if (changed.isPresent()) {
+					return ActionResult.failure(changed.get());
 				}
 				return ActionResult.ok(builds.start(context.player(), context.falsity(), plan));
 			}, CONFIRMATION_TTL_MILLIS);

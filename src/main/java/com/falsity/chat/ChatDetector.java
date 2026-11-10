@@ -207,8 +207,14 @@ public final class ChatDetector {
 		if (cleaned.isEmpty()) {
 			return Pattern.compile("(?!x)x");
 		}
+		// Falcity is a common phonetic misspelling seen in live chat. Keep the
+		// alias deliberately narrow: fuzzy matching arbitrary words would make
+		// Falsity interrupt unrelated multiplayer conversations.
+		String names = cleaned.equalsIgnoreCase("Falsity")
+			? "(?:" + Pattern.quote(cleaned) + "|Falcity)"
+			: Pattern.quote(cleaned);
 		return Pattern.compile(
-			"(?<![\\p{L}\\p{N}_])" + Pattern.quote(cleaned) + "(?![\\p{L}\\p{N}_])",
+			"(?<![\\p{L}\\p{N}_])" + names + "(?![\\p{L}\\p{N}_])",
 			Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE
 		);
 	}

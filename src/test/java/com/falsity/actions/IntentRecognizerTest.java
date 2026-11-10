@@ -9,6 +9,15 @@ import org.junit.jupiter.api.Test;
 /** Local, offline intent recognition: the requests that work with no API key. */
 class IntentRecognizerTest {
 	@Test
+	void categoryRequestsAndCourtesyAreSeparatedFromItemName() {
+		assertEquals("food", IntentRecognizer.recognize("Can you give me some food please?").orElseThrow().arg("item"));
+		assertEquals("full set of armour", IntentRecognizer.recognize("I need a full set of armour").orElseThrow().arg("item"));
+		assertEquals("tools", IntentRecognizer.recognize("Give me tools").orElseThrow().arg("item"));
+		assertEquals(64, IntentRecognizer.recognize("Give me 64 torches").orElseThrow().argInt("count", 1));
+		assertEquals("diamond pickaxe", IntentRecognizer.recognize("I need a diamond pickaxe").orElseThrow().arg("item"));
+	}
+
+	@Test
 	void itemRequestWithCount() {
 		ActionRequest request = IntentRecognizer.recognize("give me 32 diamonds").orElseThrow();
 		assertEquals(ActionType.GIVE_ITEM, request.type());

@@ -11,8 +11,8 @@ import com.falsity.config.FalsityConfig;
 import com.falsity.config.ItemPermissionMode;
 import com.falsity.entity.FalsityEntity;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.permissions.Permissions;
@@ -69,25 +69,43 @@ public final class GiveItemHandler implements ActionHandler {
 			);
 		}
 
-		Optional<Item> resolved = ItemAssistance.resolve(requested);
-		if (resolved.isEmpty()) {
-			return ActionResult.failure("I don't know any item called \"" + requested + "\".");
+		List<Item> selection = ItemAssistance.resolveSelection(requested);
+		if (selection.isEmpty()) {
+			return ActionResult.failure("I don't know any item or supply category called \"" + requested + "\".");
 		}
 
-		if (count > config.items.confirmAboveCount) {
+		if ((long) count * selection.size() > config.items.maxPerRequest) {
+			return ActionResult.failure("That kit is larger than I'm allowed to make at once (" + config.items.maxPerRequest + ").");
+		}
+
+		if ((long) count * selection.size() > config.items.confirmAboveCount) {
 			ConfirmationManager confirmations = FalsityMod.confirmations();
 			if (confirmations == null) {
 				return ActionResult.failure("I'm not sure I should do that.");
 			}
 			String question = "That's " + count + " " + requested + ". Should I?";
-			confirmations.request(player.getUUID(), question, () -> executeGive(context, resolved.get(), count, requested), CONFIRMATION_TTL_MILLIS);
+			confirmations.request(player.getUUID(), question, () -> executeSelection(context, selection, count, requested), CONFIRMATION_TTL_MILLIS);
 			return ActionResult.pending(question);
 		}
 
-		return executeGive(context, resolved.get(), count, requested);
+		return executeSelection(context, selection, count, requested);
 	}
 
-	/** Runs the actual hand-over, marking the cooldown as used. */
+	private ActionResult executeSelection(ActionContext context, List<Item> items, int count, String displayName) {
+		int delivered = 0;
+		for (Item item : items) {
+			ActionResult result = executeGive(context, item, count, displayName);
+			if (!result.success()) {
+				return delivered == 0 ? result : ActionResult.failure("I could only deliver part of that kit; your inventory became full.");
+			}
+			delivered++;
+		}
+		return ActionResult.ok(items.size() == 1
+			? "Here you go: " + count + " " + displayName + "."
+			: "Here you go: your " + displayName + " kit (" + items.size() + " item types)." );
+	}
+
+	/** Runs one actual hand-over, marking the cooldown as used. */
 	private ActionResult executeGive(ActionContext context, Item item, int count, String displayName) {
 		Player player = context.player();
 		FalsityConfig config = context.config();
