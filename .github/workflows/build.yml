@@ -68,6 +68,8 @@ jobs:
       # comment, which plain `gh api` can read back.
       - name: Publish the build log as a commit comment
         if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ ! -f build.log ]; then
             echo "No build log was captured."
@@ -78,6 +80,9 @@ jobs:
             echo
             echo "== game tests and task outcomes =="
             grep -E "GameTest|gametest|BUILD SUCCESSFUL|BUILD FAILED|> Task .*(FAILED|NO-SOURCE)|tests completed|Test run" build.log | tail -80
+            echo
+            echo "== tasks executed by the build =="
+            grep -E "^> Task " build.log | tail -60
             echo
             echo "== errors and warnings =="
             grep -n -E "error:|warning:|FAILURE|Caused by|Execution failed|at net\.|at com\." build.log | head -200
