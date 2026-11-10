@@ -1,5 +1,7 @@
 package com.falsity.actions;
 
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -28,7 +30,7 @@ public final class IntentRecognizer {
 		Pattern.compile("\\b(build|make|construct|create|put up|erect|assemble)\\b[^.!?]*", Pattern.CASE_INSENSITIVE);
 
 	private static final Pattern STOP_FIGHT =
-		Pattern.compile("\\b(stop|call off|quit|halt)\\b[^.!?]*\\b(fight|fighting|attacking|combat|attacking|offense)\\b", Pattern.CASE_INSENSITIVE);
+		Pattern.compile("\\b(stop|call off|quit|halt)\\b[^.!?]*\\b(fight|fighting|attack|attacking|combat|offense)\\b", Pattern.CASE_INSENSITIVE);
 
 	private static final Pattern FIGHT =
 		Pattern.compile("\\b(fight|attack|combat|help me fight|help me attack|defend me from)\\b", Pattern.CASE_INSENSITIVE);
@@ -55,28 +57,40 @@ public final class IntentRecognizer {
 		Pattern.compile("\\b(what.{0,20}nearby|what.{0,20}around|report|threat|danger|hostile|enemies|zombies|creepers|skeletons|spiders|witches)\\b", Pattern.CASE_INSENSITIVE);
 
 	private static final Pattern ITEM_REQUEST =
-		Pattern.compile("^(?:(?:can you|could you|would you|please|hey|falsity[,.!]?\\s*)*)"
+		Pattern.compile("^(?:(?:can you|could you|would you|will you|please|pls|plz|hey|hi|hello|falsity)(?:[,.:!?]*\\s+))*"
 			+ "(?:give me|bring me|get me|fetch me|hand me|pass me|drop me|deliver me|i need|i want|i'd like|i would like|can i have|may i have|could i have)"
-			+ "\\s+(.+)$", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+			+ "\\s+(.+)$", Pattern.CASE_INSENSITIVE);
 
-	private static final Pattern LEADING_NUMBER = Pattern.compile("^\\s*(\\d+)\\s*(?:of\\s+)?(.*)$", Pattern.DOTALL);
-	private static final Pattern LEADING_ARTICLE = Pattern.compile("^\\s*(?:a|an|the)\\s+", Pattern.CASE_INSENSITIVE);
+	private static final Pattern LEADING_NUMBER = Pattern.compile("^(\\d+)\\s*(?:of\\s+)?(.*)$", Pattern.CASE_INSENSITIVE);
+	private static final Pattern LEADING_ARTICLE = Pattern.compile("^(?:a|an|the|some)\\s+", Pattern.CASE_INSENSITIVE);
 	private static final Pattern TRAILING_NOISE = Pattern.compile("[\\s.,!?;:]+$");
+	private static final Pattern VAGUE_ITEM =
+		Pattern.compile("^(?:a|an|the|some|something|anything|stuff|things|thing|it|that|this|nothing|help|more|one)$", Pattern.CASE_INSENSITIVE);
 
+	// Ordered longest/most-specific first so e.g. "storage room" beats "room".
 	private static final List<String> STRUCTURES = List.of(
-		"staircase", "stair", "stairs", "stairway",
-		"storage room", "storage", "storage chest", "chest",
-		"bridge", "tower", "castle", "house", "hut", "cabin", "cottage",
-		"wall", "fence", "farm", "platform", "floor", "foundation",
-		"pillar", "column", "roof", "room", "pond", "well", "gate"
+		"storage room", "storage chest", "foundation", "staircase",
+		"stairway", "platform", "cottage", "storage", "bridge",
+		"castle", "column", "pillar", "stairs", "tower",
+		"cabin", "chest", "fence", "floor", "house",
+		"stair", "farm", "gate", "pond", "roof",
+		"room", "wall", "well", "hut"
 	);
 
+	// Ordered longest/most-specific first so "wooden" beats "wood" and "cobblestone"/"sandstone" beat "stone".
 	private static final List<String> MATERIALS = List.of(
-		"dark oak", "oak", "spruce", "birch", "jungle", "acacia", "mangrove",
-		"wood", "wooden", "logs", "log", "planks", "plank",
-		"stone", "cobblestone", "cobble", "bricks", "brick", "sandstone",
-		"diorite", "granite", "andesite", "prismarine", "wool", "glass"
+		"dark oak", "cobblestone", "sandstone", "prismarine",
+		"wooden", "planks", "bricks", "andesite", "granite", "diorite",
+		"spruce", "birch", "jungle", "acacia", "mangrove",
+		"cobble", "plank", "brick", "logs", "stone", "wood", "log",
+		"oak", "wool", "glass"
 	);
+
+	private static final List<WordCandidate> STRUCTURE_PATTERNS = compileCandidates(STRUCTURES);
+	private static final List<WordCandidate> MATERIAL_PATTERNS = compileCandidates(MATERIALS);
+
+	private record WordCandidate(String keyword, Pattern pattern) {
+	}
 
 	private IntentRecognizer() {
 	}
@@ -86,7 +100,7 @@ public final class IntentRecognizer {
 		if (message == null || message.isBlank()) {
 			return Optional.empty();
 		}
-		String text = message.trim();
+		String text = message.trim().replaceAll("\\s+", " ");
 
 		if (STOP_BUILD.matcher(text).find()) {
 			return Optional.of(ActionRequest.of(ActionType.STOP_BUILD));
@@ -138,22 +152,34 @@ public final class IntentRecognizer {
 		if (!matcher.matches()) {
 			return Optional.empty();
 		}
-		String remainder = matcher.group(1).trim();
+		String remainder = TRAILING_NOISE.matcher(matcher.group(1).trim()).replaceFirst("").trim();
 		if (remainder.isEmpty()) {
+			return Optional.empty();
+		}
+
+		String lowerRemainder = remainder.toLowerCase(Locale.ROOT);
+		if (lowerRemainder.startsWith("to ") || lowerRemainder.startsWith("you to ")) {
 			return Optional.empty();
 		}
 
 		int count = 1;
 		Matcher number = LEADING_NUMBER.matcher(remainder);
 		if (number.matches()) {
-			count = Integer.parseInt(number.group(1));
+			try {
+				count = Integer.parseInt(number.group(1));
+			} catch (NumberFormatException overflow) {
+				return Optional.empty();
+			}
+			if (count < 1) {
+				return Optional.empty();
+			}
 			remainder = number.group(2).trim();
 		}
 
 		remainder = LEADING_ARTICLE.matcher(remainder).replaceFirst("");
 		remainder = TRAILING_NOISE.matcher(remainder).replaceFirst("");
 		remainder = remainder.replaceAll("\\s+", " ").trim();
-		if (remainder.isEmpty()) {
+		if (remainder.isEmpty() || VAGUE_ITEM.matcher(remainder).matches()) {
 			return Optional.empty();
 		}
 
@@ -170,32 +196,40 @@ public final class IntentRecognizer {
 		}
 		String phrase = text.toLowerCase(Locale.ROOT);
 
-		String structure = null;
-		for (String candidate : STRUCTURES) {
-			if (phrase.contains(candidate)) {
-				structure = candidate;
-				break;
-			}
-		}
+		String structure = firstWordMatch(phrase, STRUCTURE_PATTERNS);
 		if (structure == null) {
 			// "build me something here" is too vague to act on.
 			return Optional.empty();
 		}
 
-		String material = null;
-		for (String candidate : MATERIALS) {
-			if (phrase.contains(candidate)) {
-				material = candidate;
-				break;
-			}
-		}
+		String material = firstWordMatch(phrase, MATERIAL_PATTERNS);
 
-		Map<String, Object> args = new java.util.HashMap<>();
+		Map<String, Object> args = new HashMap<>();
 		args.put("structure", structure);
 		if (material != null) {
 			args.put("material", material);
 		}
 
 		return Optional.of(ActionRequest.of(ActionType.BUILD, args));
+	}
+
+	private static List<WordCandidate> compileCandidates(List<String> keywords) {
+		List<WordCandidate> compiled = new ArrayList<>(keywords.size());
+		for (String keyword : keywords) {
+			compiled.add(new WordCandidate(
+				keyword,
+				Pattern.compile("\\b" + Pattern.quote(keyword) + "\\b", Pattern.CASE_INSENSITIVE)
+			));
+		}
+		return List.copyOf(compiled);
+	}
+
+	private static String firstWordMatch(String phrase, List<WordCandidate> candidates) {
+		for (WordCandidate candidate : candidates) {
+			if (candidate.pattern().matcher(phrase).find()) {
+				return candidate.keyword();
+			}
+		}
+		return null;
 	}
 }

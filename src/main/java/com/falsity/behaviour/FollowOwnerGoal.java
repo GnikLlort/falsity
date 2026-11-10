@@ -42,13 +42,17 @@ public class FollowOwnerGoal extends Goal {
 
 		Player candidate = ownerOptional.get();
 
-		if (!candidate.isAlive() || candidate.isSpectator() || candidate.level() != this.falsity.level()) {
+		if (!candidate.isAlive() || candidate.isRemoved() || candidate.isSpectator() || candidate.level() != this.falsity.level()) {
+			return false;
+		}
+
+		double distance = Math.sqrt(this.falsity.distanceToSqr(candidate));
+		if (!CompanionBehaviour.shouldFollow(distance, FalsityMod.config().companion)) {
 			return false;
 		}
 
 		this.owner = candidate;
-		double distance = Math.sqrt(this.falsity.distanceToSqr(candidate));
-		return CompanionBehaviour.shouldFollow(distance, FalsityMod.config().companion);
+		return true;
 	}
 
 	@Override
@@ -57,7 +61,7 @@ public class FollowOwnerGoal extends Goal {
 			return false;
 		}
 
-		if (!this.owner.isAlive() || this.owner.level() != this.falsity.level()) {
+		if (!this.owner.isAlive() || this.owner.isRemoved() || this.owner.isSpectator() || this.owner.level() != this.falsity.level()) {
 			return false;
 		}
 
@@ -82,15 +86,19 @@ public class FollowOwnerGoal extends Goal {
 			return;
 		}
 
-		// Look at the owner every tick; only re-path occasionally.
+		// Look at the owner every tick; only re-path occasionally unless navigation is idle.
 		this.falsity.getLookControl().setLookAt(this.owner, 10.0F, this.falsity.getMaxHeadXRot());
 
-		if (--this.ticksUntilRepath > 0) {
+		if (--this.ticksUntilRepath > 0 && this.falsity.getNavigation().isInProgress()) {
 			return;
 		}
 
-		this.ticksUntilRepath = PATH_RECALCULATION_TICKS;
 		double speed = CompanionBehaviour.followSpeed(FalsityMod.config().companion);
-		this.falsity.getNavigation().moveTo(this.owner, speed);
+		boolean started = this.falsity.getNavigation().moveTo(this.owner, speed);
+		if (!started) {
+			started = this.falsity.getNavigation().moveTo(this.owner.getX(), this.owner.getY(), this.owner.getZ(), speed);
+		}
+		// Retry on the next tick when a path cannot be built yet (e.g. while landing).
+		this.ticksUntilRepath = started ? PATH_RECALCULATION_TICKS : 1;
 	}
 }

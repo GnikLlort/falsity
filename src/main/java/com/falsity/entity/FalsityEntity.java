@@ -3,6 +3,7 @@ package com.falsity.entity;
 import com.falsity.FalsityMod;
 import com.falsity.ai.OfflineFallback;
 import com.falsity.behaviour.CompanionBehaviour;
+import com.falsity.behaviour.FollowOwnerGoal;
 import com.falsity.memory.PlayerMemory;
 import com.falsity.personality.PersonalityProfile;
 import net.minecraft.core.particles.ParticleTypes;
@@ -15,7 +16,10 @@ import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.PathfinderMob;
 import net.minecraft.world.entity.Pose;
+import net.minecraft.world.entity.ai.attributes.AttributeInstance;
 import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.ai.goal.RandomStrollGoal;
+import net.minecraft.world.entity.ai.goal.WrappedGoal;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.storage.ValueInput;
@@ -127,8 +131,40 @@ public class FalsityEntity extends PathfinderMob {
 		this.ownerId = player.getUUID().toString();
 		this.cachedOwner = player;
 		this.setPersistenceRequired();
+		// Drop any idle stroll path so following can take over cleanly.
+		this.getNavigation().stop();
 		FalsityMod.debug("Falsity bonded to {}", player.getName().getString());
 		recordFirstMeeting(player);
+	}
+
+	/** Whether the follow-owner goal is registered on this entity. */
+	public boolean hasFollowGoal() {
+		for (WrappedGoal goal : this.goalSelector.getAvailableGoals()) {
+			if (goal.getGoal() instanceof FollowOwnerGoal) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Whether the follow-owner goal is currently running. */
+	public boolean isFollowingOwner() {
+		for (WrappedGoal goal : this.goalSelector.getAvailableGoals()) {
+			if (goal.isRunning() && goal.getGoal() instanceof FollowOwnerGoal) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Whether idle random strolling is currently running. */
+	public boolean isStrolling() {
+		for (WrappedGoal goal : this.goalSelector.getAvailableGoals()) {
+			if (goal.isRunning() && goal.getGoal() instanceof RandomStrollGoal) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -425,7 +461,8 @@ public class FalsityEntity extends PathfinderMob {
 		}
 
 		this.combatCooldownTicks = 20;
-		float damage = (float) this.getAttribute(Attributes.ATTACK_DAMAGE).getValue();
+		AttributeInstance attackDamage = this.getAttribute(Attributes.ATTACK_DAMAGE);
+		float damage = attackDamage != null ? (float) attackDamage.getValue() : 2.0F;
 		target.hurt(this.damageSources().mobAttack(this), damage);
 	}
 

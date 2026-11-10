@@ -1,6 +1,8 @@
 package com.falsity.chat;
 
 import java.util.Locale;
+import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -8,36 +10,92 @@ import java.util.regex.Pattern;
  *
  * <p>Detection is deliberately local and case-insensitive, so it works before
  * any network call and never depends on the AI. A message counts as addressed
- * to Falsity when the name appears as a whole word anywhere in it: that covers
- * "Hey Falsity, how are you?", "Falsity, can you help me?" and
- * "Can you come here, Falsity?" without a pile of special cases.
+ * to Falsity only when the name appears as a whole word in a direct-addressing
+ * position (such as at the start or end, after a greeting, or set off as a
+ * vocative), so embedded substrings and ordinary noun references like
+ * "my falsity meter is broken" never trigger a reply.
  *
  * <p>This class never blocks, rewrites or forwards a message: the listener only
  * reads from it. Ordinary chat keeps working exactly as before.
  */
 public final class ChatDetector {
+	private static final Set<String> NON_VOCATIVE_PREDECESSORS = Set.of(
+		"a", "an", "the", "my", "your", "his", "her", "its", "our", "their",
+		"this", "that", "these", "those", "some", "any", "no", "every",
+		"each", "such", "another", "certain"
+	);
+
+	private static final Set<String> ADDRESS_LEAD_INS = Set.of(
+		"hey", "hi", "hiya", "hello", "howdy", "yo", "sup",
+		"morning", "afternoon", "evening",
+		"ok", "okay", "alright",
+		"please", "pls", "plz",
+		"thanks", "ty", "sorry", "wait", "listen", "look",
+		"bye", "goodbye", "cya", "goodnight", "gm", "gn",
+		"oh", "ah", "well", "so", "psst", "oi", "ay", "ayy",
+		"yes", "yeah", "yep", "sure", "nope"
+	);
+
+	private static final Pattern POSSESSIVE_SUFFIX = Pattern.compile("^['\u2019]s(?![\\p{L}\\p{N}_])", Pattern.CASE_INSENSITIVE);
+	private static final Pattern VOCATIVE_FOLLOW_PUNCT = Pattern.compile("^[,:!?]");
+	private static final Pattern TRAILING_PUNCT_ONLY = Pattern.compile("^[.,!?;:\u2026'\"\\)\\]]*$");
+	private static final Pattern TRAILING_WORD = Pattern.compile("([\\p{L}]+)$");
+
 	private ChatDetector() {
 	}
 
 	/** Whether the message addresses Falsity by name, ignoring case. */
 	public static boolean mentions(String message, String falsityName) {
-		return wordPattern(falsityName).matcher(message).find();
+		if (message == null || message.isBlank()) {
+			return false;
+		}
+		Matcher matcher = wordPattern(falsityName).matcher(message);
+		while (matcher.find()) {
+			if (isDirectMention(message, matcher.start(), matcher.end())) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/**
 	 * Removes the name from a message and cleans up the separators left behind.
-	 * Returns the message unchanged when the name is not present.
+	 * Returns the message unchanged when the name is not present as a mention.
 	 */
 	public static String stripMention(String message, String falsityName) {
 		if (message == null) {
 			return "";
 		}
-		String withoutName = wordPattern(falsityName).matcher(message).replaceFirst("");
-		withoutName = withoutName.replaceAll("\\s+", " ").trim();
-		// "Hey Falsity, how are you?" -> "Hey, how are you?" -> "Hey, how are you?"
-		// "Falsity, come here." -> ", come here." -> "come here."
-		withoutName = withoutName.replaceFirst("^[,.;:!?\\s]+", "");
-		return withoutName.trim();
+		Pattern pattern = wordPattern(falsityName);
+		String current = message;
+		boolean removed = false;
+		while (true) {
+			Matcher matcher = pattern.matcher(current);
+			boolean foundMention = false;
+			while (matcher.find()) {
+				if (isDirectMention(current, matcher.start(), matcher.end())) {
+					current = current.substring(0, matcher.start()) + current.substring(matcher.end());
+					removed = true;
+					foundMention = true;
+					break;
+				}
+			}
+			if (!foundMention) {
+				break;
+			}
+		}
+		if (!removed) {
+			return message;
+		}
+		String cleaned = current.replaceAll("\\s+", " ").trim();
+		// Collapse spaces left before punctuation ("Hey , how are you?" -> "Hey, how are you?").
+		cleaned = cleaned.replaceAll("\\s+([,.;:!?])", "$1");
+		// Collapse duplicate or dangling separators around where the name sat.
+		cleaned = cleaned.replaceAll("([,;:])(?:\\s*[,;:])+", "$1");
+		cleaned = cleaned.replaceAll("[,;:]\\s*([.!?])", "$1");
+		cleaned = cleaned.replaceFirst("^[,.;:!?\\s]+", "");
+		cleaned = cleaned.replaceAll("[,;:\\s]+$", "");
+		return cleaned.trim();
 	}
 
 	/**
@@ -60,11 +118,8 @@ public final class ChatDetector {
 
 	/** Whether the message is a plain greeting, with no request attached. */
 	public static boolean isPlainGreeting(String message) {
-		if (message == null) {
-			return false;
-		}
-		String lower = message.toLowerCase(Locale.ROOT).replaceAll("[^a-z\\s!?.]", "").trim();
-		return switch (lower) {
+		String normalized = normalizePhrase(message);
+		return switch (normalized) {
 			case "hi", "hiya", "hello", "hey", "yo", "sup", "good morning", "good afternoon", "good evening", "howdy" -> true;
 			default -> false;
 		};
@@ -72,11 +127,8 @@ public final class ChatDetector {
 
 	/** Whether the message affirms a request (for confirmation flows). */
 	public static boolean isAffirmative(String message) {
-		if (message == null) {
-			return false;
-		}
-		String lower = message.toLowerCase(Locale.ROOT).replaceAll("[^a-z\\s!.]", " ").replaceAll("\\s+", " ").trim();
-		return switch (lower) {
+		String normalized = normalizePhrase(message);
+		return switch (normalized) {
 			case "yes", "yeah", "yep", "sure", "ok", "okay", "go ahead", "start", "begin", "proceed", "do it", "build it", "confirm" -> true;
 			default -> false;
 		};
@@ -84,14 +136,65 @@ public final class ChatDetector {
 
 	/** Whether the message declines or cancels a request. */
 	public static boolean isNegative(String message) {
-		if (message == null) {
-			return false;
-		}
-		String lower = message.toLowerCase(Locale.ROOT).replaceAll("[^a-z\\s!.]", " ").replaceAll("\\s+", " ").trim();
-		return switch (lower) {
-			case "no", "nope", "cancel", "stop", "dont", "don't", "never mind", "forget it", "abort" -> true;
+		String normalized = normalizePhrase(message);
+		return switch (normalized) {
+			case "no", "nope", "cancel", "stop", "dont", "never mind", "forget it", "abort" -> true;
 			default -> false;
 		};
+	}
+
+	private static boolean isDirectMention(String message, int start, int end) {
+		String before = message.substring(0, start);
+		String after = message.substring(end);
+		if (POSSESSIVE_SUFFIX.matcher(after).find()) {
+			return false;
+		}
+
+		String beforeTrimmed = before.stripTrailing();
+		if (!beforeTrimmed.isEmpty()) {
+			Matcher prevWord = TRAILING_WORD.matcher(beforeTrimmed);
+			if (prevWord.find()) {
+				String preceding = prevWord.group(1).toLowerCase(Locale.ROOT);
+				if (NON_VOCATIVE_PREDECESSORS.contains(preceding)) {
+					return false;
+				}
+			}
+		}
+
+		if (beforeTrimmed.isEmpty()) {
+			return true;
+		}
+		char lastBefore = beforeTrimmed.charAt(beforeTrimmed.length() - 1);
+		if (",.?;:!".indexOf(lastBefore) >= 0) {
+			return true;
+		}
+
+		String lowerBefore = beforeTrimmed.toLowerCase(Locale.ROOT);
+		if (lowerBefore.endsWith("thank you") || lowerBefore.endsWith("excuse me")) {
+			return true;
+		}
+		Matcher leadIn = TRAILING_WORD.matcher(lowerBefore);
+		if (leadIn.find() && ADDRESS_LEAD_INS.contains(leadIn.group(1))) {
+			return true;
+		}
+
+		String afterTrimmed = after.stripLeading();
+		if (TRAILING_PUNCT_ONLY.matcher(afterTrimmed).matches()) {
+			return true;
+		}
+		return VOCATIVE_FOLLOW_PUNCT.matcher(afterTrimmed).find();
+	}
+
+	private static String normalizePhrase(String message) {
+		if (message == null) {
+			return "";
+		}
+		return message.toLowerCase(Locale.ROOT)
+			.replace("'", "")
+			.replace("\u2019", "")
+			.replaceAll("[^a-z\\s]", " ")
+			.replaceAll("\\s+", " ")
+			.trim();
 	}
 
 	/** Builds a case-insensitive whole-word pattern for a name. */
@@ -104,6 +207,9 @@ public final class ChatDetector {
 		if (cleaned.isEmpty()) {
 			return Pattern.compile("(?!x)x");
 		}
-		return Pattern.compile("\\b" + Pattern.quote(cleaned) + "\\b", Pattern.CASE_INSENSITIVE);
+		return Pattern.compile(
+			"(?<![\\p{L}\\p{N}_])" + Pattern.quote(cleaned) + "(?![\\p{L}\\p{N}_])",
+			Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE
+		);
 	}
 }

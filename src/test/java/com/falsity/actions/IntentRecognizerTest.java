@@ -78,4 +78,58 @@ class IntentRecognizerTest {
 		assertTrue(IntentRecognizer.recognize("").isEmpty());
 		assertTrue(IntentRecognizer.recognize(null).isEmpty());
 	}
+
+	@Test
+	void punctuatedAndNaturalPhrasingsRecognised() {
+		ActionRequest diamonds = IntentRecognizer.recognize("Give me 32 diamonds.").orElseThrow();
+		assertEquals(ActionType.GIVE_ITEM, diamonds.type());
+		assertEquals("diamonds", diamonds.arg("item"));
+		assertEquals(32, diamonds.argInt("count", 1));
+
+		ActionRequest sword = IntentRecognizer.recognize("Can you give me a sword?").orElseThrow();
+		assertEquals(ActionType.GIVE_ITEM, sword.type());
+		assertEquals("sword", sword.arg("item"));
+		assertEquals(1, sword.argInt("count", 1));
+
+		ActionRequest emeralds = IntentRecognizer.recognize("I need the emeralds.").orElseThrow();
+		assertEquals(ActionType.GIVE_ITEM, emeralds.type());
+		assertEquals("emeralds", emeralds.arg("item"));
+		assertEquals(1, emeralds.argInt("count", 1));
+
+		ActionRequest woodenHouse = IntentRecognizer.recognize("Build me a wooden house.").orElseThrow();
+		assertEquals(ActionType.BUILD, woodenHouse.type());
+		assertEquals("house", woodenHouse.arg("structure"));
+		assertEquals("wooden", woodenHouse.arg("material"));
+
+		ActionRequest castle = IntentRecognizer.recognize("Build a castle.").orElseThrow();
+		assertEquals(ActionType.BUILD, castle.type());
+		assertEquals("castle", castle.arg("structure"));
+		assertTrue(!castle.has("material"));
+	}
+
+	@Test
+	void specificMaterialsAndRepeatedSpacesHandled() {
+		ActionRequest cobbleWall = IntentRecognizer.recognize("Please  build  a  cobblestone  wall!").orElseThrow();
+		assertEquals(ActionType.BUILD, cobbleWall.type());
+		assertEquals("wall", cobbleWall.arg("structure"));
+		assertEquals("cobblestone", cobbleWall.arg("material"));
+
+		ActionRequest darkOakCabin = IntentRecognizer.recognize("Hey,  can you  give me  12  of the  oak planks ?").orElseThrow();
+		assertEquals(ActionType.GIVE_ITEM, darkOakCabin.type());
+		assertEquals("oak planks", darkOakCabin.arg("item"));
+		assertEquals(12, darkOakCabin.argInt("count", 1));
+	}
+
+	@Test
+	void vagueRequestsDoNotTriggerActions() {
+		assertTrue(IntentRecognizer.recognize("Give me something.").isEmpty());
+		assertTrue(IntentRecognizer.recognize("Can you give me anything?").isEmpty());
+		assertTrue(IntentRecognizer.recognize("I need help.").isEmpty());
+		assertTrue(IntentRecognizer.recognize("Give me a").isEmpty());
+		assertTrue(IntentRecognizer.recognize("Give me 5").isEmpty());
+		assertTrue(IntentRecognizer.recognize("Build something nice.").isEmpty());
+		assertTrue(IntentRecognizer.recognize("Make a thing.").isEmpty());
+		assertTrue(IntentRecognizer.recognize("Can you help me?").isEmpty());
+		assertTrue(IntentRecognizer.recognize("Make sure you shut the door.").isEmpty());
+	}
 }

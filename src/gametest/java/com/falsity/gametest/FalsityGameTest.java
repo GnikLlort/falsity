@@ -1,5 +1,6 @@
 package com.falsity.gametest;
 
+import com.falsity.FalsityMod;
 import com.falsity.FalsityRegistries;
 import com.falsity.entity.FalsityEntity;
 import java.util.Optional;
@@ -110,11 +111,13 @@ public class FalsityGameTest {
 	public void falsityWalksTowardsItsOwner(final GameTestHelper helper) {
 		ServerLevel level = helper.getLevel();
 
-		// A stone walkway long enough that Falsity can close the follow distance
-		// with a real path, not just step off the edge of a small platform.
+		// A stone walkway with clear headroom so Falsity can path and walk
+		// straight towards its owner without falling or hitting obstacles.
 		for (int x = 0; x <= 12; x++) {
 			for (int z = 1; z <= 3; z++) {
 				helper.setBlock(x, 0, z, Blocks.STONE);
+				helper.setBlock(x, 1, z, Blocks.AIR);
+				helper.setBlock(x, 2, z, Blocks.AIR);
 			}
 		}
 
@@ -125,29 +128,69 @@ public class FalsityGameTest {
 
 		FalsityEntity falsity = spawn(helper);
 		Player owner = helper.makeMockPlayer(GameType.SURVIVAL);
-		Vec3 here = Vec3.atCenterOf(helper.absolutePos(SPAWN));
+		Vec3 here = Vec3.atBottomCenterOf(helper.absolutePos(SPAWN));
 		owner.snapTo(here.x + 8.0, here.y, here.z);
 		falsity.bondTo(owner);
 
 		helper.assertTrue(
+			falsity.isBondedTo(owner.getUUID()),
+			"Falsity should be bonded to the owner player"
+		);
+		helper.assertTrue(
 			falsity.getOwner().isPresent(),
 			"Falsity should resolve the player it bonded with"
 		);
-
-		double startDistance = falsity.distanceToSqr(owner);
-
-		helper.succeedWhen(() ->
-			helper.assertTrue(
-				falsity.distanceToSqr(owner) < startDistance - 0.5,
-				"Falsity should walk towards its owner; it has moved "
-					+ (startDistance - falsity.distanceToSqr(owner)) + " blocks squared"
-			)
+		helper.assertTrue(
+			owner.level() == level,
+			"Owner should be in the same server level as Falsity"
 		);
+		helper.assertTrue(
+			FalsityMod.config().companion.followOwner,
+			"Follow configuration must enable following"
+		);
+		helper.assertTrue(
+			!falsity.isSitting(),
+			"Falsity must not be sitting before following"
+		);
+		helper.assertTrue(
+			falsity.hasFollowGoal(),
+			"FollowOwnerGoal must be registered on Falsity"
+		);
+
+		Vec3 startPos = falsity.position();
+		double startDistance = falsity.distanceTo(owner);
+		helper.assertTrue(
+			startDistance > FalsityMod.config().companion.followStartDistance,
+			"Owner must start beyond followStartDistance ("
+				+ FalsityMod.config().companion.followStartDistance + "), was " + startDistance
+		);
+
+		helper.succeedWhen(() -> {
+			helper.assertTrue(
+				falsity.isFollowingOwner(),
+				"FollowOwnerGoal should be running"
+			);
+			helper.assertTrue(
+				!falsity.isStrolling(),
+				"RandomStrollGoal must not interfere while following"
+			);
+			helper.assertTrue(
+				falsity.getNavigation().getPath() != null,
+				"Navigation should have a valid path towards the owner"
+			);
+			double closedDistance = startDistance - falsity.distanceTo(owner);
+			double movedFromStart = falsity.position().distanceTo(startPos);
+			helper.assertTrue(
+				closedDistance >= 0.5 && movedFromStart >= 0.5,
+				"Falsity should walk towards its owner; closed distance by "
+					+ closedDistance + " blocks (moved " + movedFromStart + " from start)"
+			);
+		});
 	}
 
 	private static FalsityEntity spawn(final GameTestHelper helper) {
 		ServerLevel level = helper.getLevel();
-		Vec3 position = Vec3.atCenterOf(helper.absolutePos(SPAWN));
+		Vec3 position = Vec3.atBottomCenterOf(helper.absolutePos(SPAWN));
 		FalsityEntity falsity = new FalsityEntity(FalsityRegistries.FALSITY, level);
 		falsity.snapTo(position.x, position.y, position.z, 0.0F, 0.0F);
 		level.addFreshEntity(falsity);
