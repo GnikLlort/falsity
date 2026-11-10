@@ -41,17 +41,27 @@ jobs:
       # stage has its own annotation budget (GitHub surfaces only the first
       # handful of errors per step).
       - name: Compile the common sources
-        run: ./gradlew compileJava --stacktrace 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+        run: |
+          set -o pipefail
+          ./gradlew compileJava --stacktrace 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
 
       - name: Compile the client sources
-        run: ./gradlew compileClientJava --stacktrace 2>&1 | tee -a "$GITHUB_WORKSPACE/build.log"
+        run: |
+          set -o pipefail
+          ./gradlew compileClientJava --stacktrace 2>&1 | tee -a "$GITHUB_WORKSPACE/build.log"
 
       - name: Run unit tests
-        run: ./gradlew test --stacktrace 2>&1 | tee -a "$GITHUB_WORKSPACE/build.log"
+        run: |
+          set -o pipefail
+          ./gradlew test --stacktrace 2>&1 | tee -a "$GITHUB_WORKSPACE/build.log"
+          grep -h -o 'tests="[0-9]*" skipped="[0-9]*" failures="[0-9]*" errors="[0-9]*"' \
+            build/test-results/test/*.xml | tee -a "$GITHUB_WORKSPACE/build.log"
 
       # This also runs the server game tests: Loom wires them into `build`.
       - name: Build and run game tests
-        run: ./gradlew build --stacktrace --warning-mode summary 2>&1 | tee -a "$GITHUB_WORKSPACE/build.log"
+        run: |
+          set -o pipefail
+          ./gradlew build --stacktrace --warning-mode summary 2>&1 | tee -a "$GITHUB_WORKSPACE/build.log"
 
       - name: Upload the mod jar
         uses: actions/upload-artifact@v7

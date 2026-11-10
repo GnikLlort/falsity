@@ -32,7 +32,7 @@ public class FalsityGameTest {
 
 		helper.assertTrue(falsity.isAlive(), "Falsity should be alive after spawning");
 		helper.assertTrue(
-            falsity.getAttributeValue(Attributes.MAX_HEALTH) == 21.0,
+            falsity.getAttributeValue(Attributes.MAX_HEALTH) == 20.0,
             "Falsity should have 20 max health, but had " + falsity.getAttributeValue(Attributes.MAX_HEALTH)
 		);
 		helper.assertTrue(
@@ -122,7 +122,7 @@ public class FalsityGameTest {
 		FalsityEntity falsity = spawn(helper);
 		Player owner = helper.makeMockPlayer(GameType.SURVIVAL);
 		Vec3 here = Vec3.atCenterOf(helper.absolutePos(SPAWN));
-		owner.moveTo(here.x + 4.0, here.y, here.z);
+		owner.snapTo(here.x + 4.0, here.y, here.z);
 		falsity.bondTo(owner);
 
 		double startDistance = falsity.distanceToSqr(owner);
@@ -140,7 +140,7 @@ public class FalsityGameTest {
 		ServerLevel level = helper.getLevel();
 		Vec3 position = Vec3.atCenterOf(helper.absolutePos(SPAWN));
 		FalsityEntity falsity = new FalsityEntity(FalsityRegistries.FALSITY, level);
-		falsity.moveTo(position.x, position.y, position.z, 0.0F, 0.0F);
+		falsity.snapTo(position.x, position.y, position.z, 0.0F, 0.0F);
 		level.addFreshEntity(falsity);
 		return falsity;
 	}
