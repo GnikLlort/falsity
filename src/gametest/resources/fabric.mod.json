@@ -1,0 +1,15 @@
+{
+	"schemaVersion": 1,
+	"id": "falsity-gametest",
+	"version": "1.0.0",
+	"name": "Falsity game tests",
+	"environment": "*",
+	"entrypoints": {
+		"fabric-gametest": [
+			"com.falsity.gametest.FalsityGameTest"
+		]
+	},
+	"depends": {
+		"falsity": "*"
+	}
+}

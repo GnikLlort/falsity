@@ -1,0 +1,216 @@
+# Developing Falsity
+
+Everything you need to build, test and change this mod — including the parts
+that are easy to get wrong on 26.3.
+
+## What you need
+
+| Tool | Version | Why |
+| --- | --- | --- |
+| JDK | **25** | Minecraft 26.3 and Fabric Loom 1.19 both target Java 25. The build sets `options.release = 25`. |
+| Gradle | **9.8.2** | Pulled by the wrapper. Never install it separately; run `./gradlew`. |
+| Python | 3.9+ with **Pillow** | Only for the asset tools in `tools/`. The game and the build do not need Python at runtime. |
+
+No other SDKs, mod loaders or decompilers are required.
+
+## First build
+
+```bash
+./gradlew build
+```
+
+That single command
+
+1. compiles the common source set (`src/main/java`),
+2. compiles the client source set (`src/client/java`),
+3. runs the JUnit tests (`src/test/java`),
+4. compiles and runs the server-side game tests (`src/gametest/java`) in a real
+   headless Minecraft server, then
+5. writes the jar to `build/libs/`.
+
+If a game test fails, the build fails: Loom wires `runGameTest` into `build`.
+That is deliberate — a mod whose entity cannot spawn is not a working mod.
+
+## The commands, one at a time
+
+| Command | What it does |
+| --- | --- |
+| `./gradlew compileJava` | Compiles the common (server + shared) sources. Fastest syntax/API check. |
+| `./gradlew compileClientJava` | Compiles the client sources against the client-only Minecraft classes. |
+| `./gradlew test` | Runs the plain JUnit tests: config serialisation/clamping and the follow-distance arithmetic. |
+| `./gradlew runGameTest` | Runs the game tests in a headless dedicated server. |
+| `./gradlew build` | Everything above, plus the jar. |
+| `./gradlew runClient` | Development client, with the mod loaded. |
+| `./gradlew runServer` | Development dedicated server. |
+
+`./gradlew tasks` lists the rest.
+
+## Source sets
+
+Loom's `splitEnvironmentSourceSets()` is enabled, so client-only code cannot be
+loaded on a server and cannot accidentally reference server-only types:
+
+| Source set | Path | Runs on |
+| --- | --- | --- |
+| common | `src/main/java` | both sides |
+| client | `src/client/java` | client only |
+| test | `src/test/java` | plain JVM, no game |
+| gametest | `src/gametest/java` | headless server, part of `build` |
+
+The gametest source set is created by this block in `build.gradle`:
+
+```groovy
+fabricApi {
+    configureTests {
+        createSourceSet = true
+        modId = "falsity-gametest"
+        eula = true
+    }
+}
+```
+
+Everything a game test needs is registered in
+`src/main/java/com/falsity/FalsityRegistries` and initialised by the normal
+mod entrypoint, which the test server loads like any other server.
+
+## The asset pipeline
+
+The model geometry and the texture are generated, never hand-edited. One design
+file is the single source of truth:
+
+```
+tools/model/falsity_model.json          design: parts, boxes, colours, UV budget
+        │
+        ├── tools/generate_assets.py    → FalsityModelGeometry.java
+        │                               → textures/entity/falsity/falsity.png
+        │                               → textures/item/falsity_spawn_egg.png
+        │                               → assets/falsity/icon.png
+        └── (--preview)                 → docs/images/falsity_model_preview.png
+```
+
+```bash
+python3 -m pip install pillow          # once, e.g. in a virtualenv
+python3 tools/generate_assets.py       # regenerate everything
+python3 tools/generate_assets.py --check   # fail if anything is stale (CI runs this)
+python3 tools/generate_assets.py --preview # also re-render the preview sheet
+python3 tools/validate_assets.py       # static resource checks (CI runs this)
+```
+
+Because the same tool computes the UV layout, paints the texture and writes the
+Java geometry, the model and its art cannot drift apart. `--check` makes the
+generated files reproducible: if you edit a generated file by hand, CI fails
+until you either regenerate or change the design file.
+
+If you change the model, always look at the preview before committing. It is a
+small z-buffered rasteriser written for exactly this purpose, and it is QA
+tooling — it ships with the repo, not with the mod.
+
+## Configuration
+
+Falsity reads `config/falsity.json` from the game directory (server-side). The
+file is created with defaults on first launch. `FalsityConfig` is a plain data
+holder:
+
+- `fromJson(String)` / `toJson()` are pure and unit tested,
+- `sanitise()` clamps every value into a usable range, so a hand-edited file can
+  never produce a mob that follows at 900 blocks per tick,
+- `load(Path)` / `save(Path)` are the only methods that touch disk, and saving is
+  atomic (temp file + move).
+
+Rules for adding settings:
+
+1. Only add a setting when the behaviour it controls exists. A config key that
+   does nothing is a lie in a config file.
+2. Clamp it in `sanitise()` and cover the clamp with a unit test.
+3. Never put secrets in this file. See below.
+
+## Secrets
+
+The Groq API key (Milestone 3) will be read from a separate file that is **not**
+in the repository — `.gitignore` already excludes `secrets.json`. The key will
+never be logged, never written to `config/falsity.json`, and never sent to a
+client. All API calls happen server-side and off the game threads.
+
+## How CI verifies the mod
+
+`.github/workflows/build.yml` runs on every push:
+
+```
+compileJava → compileClientJava → test → build (which runs the game tests)
+```
+
+Each stage is its own step with `set -o pipefail`, so a failing Gradle task
+cannot be hidden by the `tee` that writes the log. The log is also posted back
+as a **commit comment**, so you can read the exact compiler or test output
+without downloading an artifact:
+
+```bash
+gh api repos/<owner>/<repo>/commits/$(git rev-parse HEAD)/comments --jq '.[].body'
+```
+
+What a green run proves:
+
+- both source sets compile against real 26.3 classes,
+- the pure logic tests pass,
+- a real dedicated server loads the mod, spawns Falsity, ticks it, bonds it to a
+  player, obeys sit/follow, and measures it walking towards its owner.
+
+What it does **not** prove: how the mob looks. Rendering needs a client, so the
+visual check is `./gradlew runClient` plus the generated preview, and the
+`docs/images/falsity_model_preview.png` sheet in the README.
+
+## 26.3 notes that will save you an hour
+
+These are the API facts this project had to discover against the compiled game,
+and they are what the code relies on:
+
+- **Identifier** — `Identifier.fromNamespaceAndPath(ns, path)`. There is no
+  `new Identifier(...)` / `ResourceLocation` constructor left.
+- **Positioning** — `Entity#moveTo` no longer exists. Use `snapTo(Vec3)`,
+  `snapTo(x, y, z, yRot, xRot)`, or `teleportTo(x, y, z)`; `setPos` only moves
+  the entity's position without `yRot`/`xRot`.
+- **Goal selectors are protected** — a helper class cannot add goals to a `Mob`.
+  `FalsityGoals.addGoals(entity, selector)` is called from the entity's own
+  `registerGoals()`.
+- **Do not invent synched-data ids.** In 26.3 the slot range available to an
+  entity subclass is not free for the taking: hand-rolled accessors failed at
+  spawn with `Data value id is too big with 16! (Max is 15)`. Falsity therefore
+  syncs state that clients need through mechanisms the game already syncs —
+  `Pose.SITTING` for sitting — and keeps everything else server-side until the
+  horror-stage networking adds a payload with an explicit schema.
+- **Saving** — `ValueOutput#putString/putBoolean/putInt` and
+  `ValueInput#getStringOr/getBooleanOr/getIntOr`. The old `CompoundTag` methods
+  on entities are gone.
+- **Rendering** — `MobRenderer<E, S>` with `extractRenderState`; the model never
+  touches the entity. `LayerDefinition.create(mesh, 64, 64)`, and model layers are
+  registered with `ModelLayerRegistry.registerModelLayer`.
+- **Creative tabs** — `CreativeModeTabEvents.modifyOutputEvent`, not
+  `ItemGroupEvents`.
+- **Commands** — permission gates use `source.permissions().hasPermission(
+  Permissions.COMMANDS_MODERATOR)`.
+- **Game test helper** — `makeMockPlayer(GameType)` players are *not* registered
+  with the level, so `level.getPlayerByUUID` cannot find them. Anything that
+  resolves an owner through the level must be able to work from a cached player
+  reference for a test to be able to drive it (that is why `FalsityEntity#getOwner`
+  caches the player it bonded with).
+
+## Adding behaviour
+
+1. Put the AI in `src/main/java/com/falsity/behaviour` as a `Goal`, and keep the
+   thresholds in `CompanionBehaviour` (pure, unit tested).
+2. Register it in `FalsityGoals.addGoals` with an explicit priority and
+   `EnumSet` of flags.
+3. If clients need to know about it, prefer an existing synced mechanism; if
+   there is none, add a payload in the networking package (Milestone 2) rather
+   than a guessed synched-data id.
+4. Add a game test that drives the real method, not a copy of the logic.
+5. Update `docs/ARCHITECTURE.md` if the structure changed, and
+   `docs/ROADMAP.md` if a milestone moved.
+
+## Style
+
+- Tabs for indentation, matching the rest of the codebase.
+- Javadoc explains *why*, not *what*: the code already says what.
+- No TODO comments in place of features. If something is not implemented, it is
+  absent and listed in the roadmap.
+- No third-party model, texture, sound or code copied from another mod.

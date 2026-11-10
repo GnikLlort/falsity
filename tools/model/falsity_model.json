@@ -1,0 +1,463 @@
+{
+  "_comment": [
+    "Falsity \u2014 first-form ('plush') creature geometry, authored as data.",
+    "tools/generate_assets.py turns this file into the Java model geometry",
+    "and the entity texture, so UV layout and art can never drift apart.",
+    "",
+    "Units are Minecraft model pixels (16 px = 1 block). Model space has +Y",
+    "pointing DOWN, so the entity's feet sit at y=24 and the head is above at",
+    "smaller y values. 'origin' is the minimum corner of a box in part space.",
+    "Rotations are degrees.",
+    "",
+    "Proportions: an oversized head (10 wide) on a small round body (7 wide),",
+    "short limbs, long drooping ears with teal tips, and a teal cap and trim."
+  ],
+  "texture": {
+    "width": 64,
+    "height": 64
+  },
+  "java": {
+    "package": "com.falsity.client.model",
+    "class": "FalsityModelGeometry"
+  },
+  "palette": {
+    "ivory": "#E7DFCE",
+    "ivory_shadow": "#D3C8B1",
+    "ivory_pale": "#F5EFE2",
+    "teal": "#2E4E4C",
+    "teal_shadow": "#1F3635",
+    "teal_light": "#3F6663",
+    "eye": "#14161A",
+    "eye_iris": "#8FB6A8",
+    "eye_glint": "#F8F5EC",
+    "blush": "#DE9DA3",
+    "mouth": "#42383A",
+    "thread": "#B3A78F",
+    "stitch": "#8E2F35",
+    "outline": "#1B2321"
+  },
+  "parts": [
+    {
+      "name": "body",
+      "parent": null,
+      "pivot": [
+        0,
+        21,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "role": "Small round torso, narrower than the head so the head dominates the silhouette.",
+      "boxes": [
+        {
+          "name": "body_lower",
+          "origin": [
+            -3.5,
+            -4,
+            -3
+          ],
+          "size": [
+            7,
+            4,
+            6
+          ],
+          "material": "ivory"
+        },
+        {
+          "name": "body_upper",
+          "origin": [
+            -3,
+            -7,
+            -2.5
+          ],
+          "size": [
+            6,
+            3,
+            5
+          ],
+          "material": "ivory"
+        },
+        {
+          "name": "skirt",
+          "origin": [
+            -4,
+            -1.5,
+            -3.5
+          ],
+          "size": [
+            8,
+            1,
+            7
+          ],
+          "material": "teal"
+        },
+        {
+          "name": "belly",
+          "origin": [
+            -2,
+            -4.5,
+            -3.5
+          ],
+          "size": [
+            4,
+            3,
+            1
+          ],
+          "material": "ivory_pale",
+          "front_decal": "belly"
+        }
+      ]
+    },
+    {
+      "name": "head",
+      "parent": "body",
+      "pivot": [
+        0,
+        -7,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "role": "Oversized head with a teal cap; the face carries painted blush and the mouth.",
+      "boxes": [
+        {
+          "name": "skull",
+          "origin": [
+            -5,
+            -8,
+            -4.5
+          ],
+          "size": [
+            10,
+            8,
+            9
+          ],
+          "material": "ivory",
+          "front_decal": "face"
+        },
+        {
+          "name": "cap",
+          "origin": [
+            -4,
+            -9,
+            -4
+          ],
+          "size": [
+            8,
+            2,
+            8
+          ],
+          "material": "teal"
+        },
+        {
+          "name": "muzzle",
+          "origin": [
+            -2,
+            -2.6,
+            -5
+          ],
+          "size": [
+            4,
+            2,
+            1
+          ],
+          "material": "ivory_pale",
+          "front_decal": "muzzle"
+        }
+      ]
+    },
+    {
+      "name": "eye_left",
+      "parent": "head",
+      "pivot": [
+        2.6,
+        -5,
+        -4.5
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "role": "Separate part so it can blink, widen and narrow independently of the skull.",
+      "boxes": [
+        {
+          "name": "eye_left_box",
+          "origin": [
+            -2,
+            -2,
+            -0.45
+          ],
+          "size": [
+            4,
+            4,
+            1
+          ],
+          "material": "eye",
+          "front_decal": "eye"
+        }
+      ]
+    },
+    {
+      "name": "eye_right",
+      "parent": "head",
+      "pivot": [
+        -2.6,
+        -5,
+        -4.5
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "role": "Separate part so it can blink, widen and narrow independently of the skull.",
+      "boxes": [
+        {
+          "name": "eye_right_box",
+          "origin": [
+            -2,
+            -2,
+            -0.45
+          ],
+          "size": [
+            4,
+            4,
+            1
+          ],
+          "material": "eye",
+          "front_decal": "eye"
+        }
+      ]
+    },
+    {
+      "name": "ear_left",
+      "parent": "head",
+      "pivot": [
+        5.2,
+        -5.6,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        -20
+      ],
+      "role": "Long soft ear hanging past the shoulder; splayed outwards and animated.",
+      "boxes": [
+        {
+          "name": "ear_left_box",
+          "origin": [
+            -1.25,
+            0,
+            -1.25
+          ],
+          "size": [
+            2,
+            7,
+            2
+          ],
+          "material": "ivory",
+          "tip_material": "teal",
+          "front_decal": "stitch_ear"
+        }
+      ]
+    },
+    {
+      "name": "ear_right",
+      "parent": "head",
+      "pivot": [
+        -5.2,
+        -5.6,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        20
+      ],
+      "role": "Long soft ear hanging past the shoulder; splayed outwards and animated.",
+      "boxes": [
+        {
+          "name": "ear_right_box",
+          "origin": [
+            -1.25,
+            0,
+            -1.25
+          ],
+          "size": [
+            2,
+            7,
+            2
+          ],
+          "material": "ivory",
+          "tip_material": "teal"
+        }
+      ]
+    },
+    {
+      "name": "arm_left",
+      "parent": "body",
+      "pivot": [
+        3.8,
+        -5.5,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        -10
+      ],
+      "role": "Short plush arm; swings when walking and lifts when Falsity greets you.",
+      "boxes": [
+        {
+          "name": "arm_left_box",
+          "origin": [
+            -1,
+            0,
+            -1
+          ],
+          "size": [
+            2,
+            5,
+            2
+          ],
+          "material": "ivory",
+          "tip_material": "ivory_shadow"
+        }
+      ]
+    },
+    {
+      "name": "arm_right",
+      "parent": "body",
+      "pivot": [
+        -3.8,
+        -5.5,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        10
+      ],
+      "role": "Short plush arm; swings when walking and lifts when Falsity greets you.",
+      "boxes": [
+        {
+          "name": "arm_right_box",
+          "origin": [
+            -1,
+            0,
+            -1
+          ],
+          "size": [
+            2,
+            5,
+            2
+          ],
+          "material": "ivory",
+          "tip_material": "ivory_shadow"
+        }
+      ]
+    },
+    {
+      "name": "leg_left",
+      "parent": "body",
+      "pivot": [
+        2,
+        -0.5,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "role": "Stubby foot, mostly hidden by the skirt.",
+      "boxes": [
+        {
+          "name": "leg_left_box",
+          "origin": [
+            -1.5,
+            0,
+            -1.5
+          ],
+          "size": [
+            3,
+            3,
+            3
+          ],
+          "material": "teal"
+        }
+      ]
+    },
+    {
+      "name": "leg_right",
+      "parent": "body",
+      "pivot": [
+        -2,
+        -0.5,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0
+      ],
+      "role": "Stubby foot, mostly hidden by the skirt.",
+      "boxes": [
+        {
+          "name": "leg_right_box",
+          "origin": [
+            -1.5,
+            0,
+            -1.5
+          ],
+          "size": [
+            3,
+            3,
+            3
+          ],
+          "material": "teal"
+        }
+      ]
+    },
+    {
+      "name": "tail",
+      "parent": "body",
+      "pivot": [
+        0,
+        -1.5,
+        3
+      ],
+      "rotation": [
+        -20,
+        0,
+        0
+      ],
+      "role": "A short tail that flicks when Falsity is pleased and goes still when it is not.",
+      "boxes": [
+        {
+          "name": "tail_box",
+          "origin": [
+            -1,
+            -1,
+            0
+          ],
+          "size": [
+            2,
+            2,
+            3
+          ],
+          "material": "teal",
+          "tip_material": "teal_shadow"
+        }
+      ]
+    }
+  ]
+}

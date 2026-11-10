@@ -1,0 +1,96 @@
+plugins {
+	// Minecraft 26.x is published unobfuscated, so Loom's non-remapping plugin id is used.
+	id 'net.fabricmc.fabric-loom' version "${loom_version}"
+	id 'maven-publish'
+}
+
+base {
+	archivesName = project.archives_base_name
+}
+
+repositories {
+	// Loom adds the Minecraft and Fabric repositories itself. Add third-party mod
+	// repositories here if a dependency ever needs one.
+}
+
+loom {
+	// Keep client-only code out of the server jar and the dedicated server's classpath.
+	splitEnvironmentSourceSets()
+
+	mods {
+		"falsity" {
+			sourceSet sourceSets.main
+			sourceSet sourceSets.client
+		}
+	}
+}
+
+// Sets up the game-test source set (src/gametest) and its run configurations.
+// Server game tests run as part of `./gradlew build`.
+fabricApi {
+	configureTests {
+		createSourceSet = true
+		modId = "falsity-gametest"
+		enableGameTests = true
+		// Client game tests need a display; they are opt-in (./gradlew runClientGameTest).
+		enableClientGameTests = false
+		// Accepts https://aka.ms/MinecraftEULA when running game tests.
+		eula = true
+	}
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+	testImplementation "net.fabricmc:fabric-loader-junit:${project.loader_version}"
+	testImplementation "org.junit.jupiter:junit-jupiter:5.11.4"
+	testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+}
+
+test {
+	useJUnitPlatform()
+}
+
+processResources {
+	def version = project.version
+	inputs.property "version", version
+
+	filesMatching("fabric.mod.json") {
+		expand "version": version
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = project.java_version as Integer
+	it.options.encoding = 'UTF-8'
+}
+
+java {
+	withSourcesJar()
+
+	sourceCompatibility = JavaVersion.VERSION_25
+	targetCompatibility = JavaVersion.VERSION_25
+}
+
+jar {
+	def projectName = project.name
+	inputs.property "projectName", projectName
+
+	from("LICENSE") {
+		rename { "${it}_$projectName" }
+	}
+}
+
+publishing {
+	publications {
+		create("mavenJava", MavenPublication) {
+			from components.java
+		}
+	}
+
+	repositories {
+		// Publish targets are configured by whoever releases the mod.
+	}
+}

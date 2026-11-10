@@ -1,0 +1,48 @@
+# Gradle
+.gradle/
+build/
+out/
+classes/
+
+# Fabric
+run/
+remappedSrc/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+bin/
+*.launch
+
+# OS
+*.DS_Store
+
+# Java
+hs_err_*.log
+replay_*.log
+*.hprof
+*.jfr
+
+# Secrets — never commit credentials of any kind.
+# Note: the mod's own configuration lives in the Minecraft instance's config
+# directory, never in this repository, so no config path is ignored here (an
+# unanchored "config/" rule would also exclude the Java package
+# com/falsity/config and silently drop source files).
+secrets.json
+*.secret
+.env
+.env.*
+
+# Local test artefacts produced by tools/
+tools/.cache/
+tools/out/
+
+# Python tooling
+__pycache__/
+*.pyc
