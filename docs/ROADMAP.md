@@ -85,6 +85,63 @@ transformation, stalking, jumpscares.
 
 ---
 
+## M3 — Interactive companion: natural chat, actions and building
+
+**Goal:** remove the `/falsity talk` requirement so Falsity answers ordinary
+chat, and let it actually *do* things in the world — hand over items and build
+structures — under the same personality, with no second AI and no aggressive
+horror.
+
+Delivered (on the `arena/10942be9-falsity` branch):
+
+- **Command-free natural chat.** `NaturalChatListener` hooks Fabric's
+  `ServerMessageEvents.CHAT_MESSAGE`, so it fires after a message is broadcast
+  and never rewrites or forwards chat. It strips the `<Player>` prefix, skips
+  `/`-commands, and answers only when the message addresses Falsity by name
+  (case-insensitive whole-word) or continues a warm conversation that is still
+  within the configured timeout. Only the Falsity *bonded to that player* and
+  within range answers; other players' chatter is never sent to Groq. A
+  pending confirmation ("yes") or an active build ("stop building") is handled
+  even without a name mention. Configurable timeout, max length, and range.
+- **Real Groq integration, reused.** The existing `GroqClient`,
+  `ConversationManager`, `PromptBuilder`, `AIResponseParser`, `ApiKeyProvider`,
+  `OfflineFallback`, `MemoryManager`, `PersonalityManager` and `HorrorManager`
+  are the single AI implementation. Requests are asynchronous and never block
+  the tick; the reply is scheduled back onto the server thread.
+- **World action system** (`com.falsity.actions`). An allowlisted
+  `ActionType` enum and `ActionExecutor` route validated `ActionRequest`s to
+  handlers. Unknown types and undeclared argument keys are rejected before any
+  game state is touched. Companion handlers cover follow/stop, come, sit,
+  stand, greet, look-at, walk-to, stay, protect, fight/stop-fight and
+  threat-reporting. `ConfirmationManager` gates destructive requests behind a
+  player's yes/no with a TTL.
+- **Item assistance.** `ItemAssistance` resolves a player's description against
+  the real `BuiltInRegistries.ITEM` — it never invents an id or substitutes a
+  different item. `GiveItemHandler` enforces a configurable permission mode
+  (creative / operator / owner / unrestricted / none), a per-request quantity
+  cap and a cooldown, asks for confirmation above a count threshold, splits
+  stacks by the real max-stack size, and reports partial fills and overflow
+  honestly.
+- **Building system** (`com.falsity.building`). `BuildPlanner` turns a request
+  into a bounded `BuildPlan`; `BuildValidator` enforces block-count, dimension,
+  distance and loaded-chunk limits, refuses dangerous blocks (command blocks,
+  TNT, lava, fire, spawners…) and refuses to overwrite solid structures, and —
+  when inventory-based — checks the player actually owns the materials.
+  `BuildManager` places a small number of blocks per tick on the server thread,
+  consumes materials, reports progress at a configured cadence, cancels
+  cleanly, and reports failures honestly. Large builds are confirmed first.
+- **Memory and personality** flow through the same managers as before; an
+  action result that is pending or failed overrides the model's prose so the
+  player is never told an action succeeded when it did not.
+- **Config.** `config/falsity.json` gains `chat`, `items` and `building` blocks
+  with sensible clamped defaults; existing files keep working (missing keys fall
+  back to defaults). No aggressive horror is introduced this milestone.
+
+Not in this milestone: sounds, networking spine, horror escalation,
+transformation, stalking, jumpscares.
+
+---
+
 ## M3 — Presence and a networking spine
 
 **Goal:** Falsity should feel alive, and the mod needs a safe way to tell

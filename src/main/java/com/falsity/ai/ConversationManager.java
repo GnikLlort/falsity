@@ -1,5 +1,11 @@
 package com.falsity.ai;
 
+import com.falsity.actions.ActionContext;
+import com.falsity.actions.ActionExecutor;
+import com.falsity.actions.ActionRequest;
+import com.falsity.actions.ActionResult;
+import com.falsity.actions.ActionType;
+import com.falsity.actions.IntentRecognizer;
 import com.falsity.config.FalsityConfig;
 import com.falsity.entity.FalsityEntity;
 import com.falsity.horror.HorrorManager;
@@ -26,14 +32,16 @@ import org.slf4j.LoggerFactory;
  * Orchestrates player-to-Falsity conversations.
  *
  * <p>Flow: validate (enabled, message length, per-player cooldown, server
- * rate limit) on the server thread, then ask Groq asynchronously, then
- * schedule the reply back onto the server thread. The server tick is never
- * blocked waiting for the network. Any failure lands on the offline
- * fallback, so Falsity always answers.
+ * rate limit) on the server thread, then ask Groq asynchronously, then schedule
+ * the reply back onto the server thread. The server tick is never blocked
+ * waiting for the network. Any failure lands on the offline fallback, so
+ * Falsity always answers.
  *
- * <p>AI output is dialogue plus at most one validated suggestion
- * (sit / follow / greet). Suggestions are applied through the entity's own
- * methods; the model can never run commands or touch game state directly.
+ * <p>An answer is dialogue plus at most one validated action. The action comes
+ * from the model's structured request when present, otherwise from local intent
+ * recognition — which is what makes common requests work with no key at all.
+ * The action is executed through {@link ActionExecutor}; the model can never
+ * run commands or touch game state directly.
  */
 public final class ConversationManager {
 	private static final Logger LOGGER = LoggerFactory.getLogger(ConversationManager.class);
@@ -47,6 +55,8 @@ public final class ConversationManager {
 	private final OfflineFallback fallback;
 	private final Path gameDir;
 	private final LongSupplier clock;
+
+	private ActionExecutor executor;
 
 	private final Map<UUID, Long> lastRequestMillis = new HashMap<>();
 
@@ -84,6 +94,11 @@ public final class ConversationManager {
 		this.fallback = fallback;
 		this.gameDir = gameDir;
 		this.clock = clock;
+	}
+
+	/** Wires the action executor. Called once during mod initialisation. */
+	public void setActionExecutor(ActionExecutor executor) {
+		this.executor = executor;
 	}
 
 	/** Outcome of a conversation request, for the command to report. */
@@ -194,39 +209,105 @@ public final class ConversationManager {
 			return;
 		}
 
-		if (error != null || !(result instanceof GroqClient.Result.Success success)) {
+		String dialogue = null;
+		ActionRequest action = null;
+
+		if (error == null && result instanceof GroqClient.Result.Success success) {
+			var parsed = AIResponseParser.parse(success.content());
+			if (parsed.isPresent()) {
+				dialogue = parsed.get().dialogue();
+				action = parsed.get().structuredAction();
+				if (action == null) {
+					action = legacyAction(parsed.get().action());
+				}
+			}
+		}
+
+		if (dialogue == null) {
+			// No usable model reply: fall back to the offline personality, but
+			// still honour a local intent if the message asked for something.
 			deliverOffline(player, falsity, memory, personality, stage, playerMessage, isOwner);
 			return;
 		}
 
-		var parsed = AIResponseParser.parse(success.content());
-		if (parsed.isEmpty()) {
-			deliverOffline(player, falsity, memory, personality, stage, playerMessage, isOwner);
-			return;
-		}
-
-		String dialogue = parsed.get().dialogue();
-		say(player, falsity, dialogue);
-		applySuggestion(falsity, parsed.get().action());
-
-		memory.recordConversation(playerMessage, dialogue, this.config.memory.maxRecentInteractions);
-		extractFact(memory, playerMessage);
-		this.memories.save(player.getUUID());
-		this.personalities.applyEvent(player.getUUID(), player.getName().getString(), PersonalityProfile.Event.CONVERSATION);
-		this.horror.recordInteraction(player.getUUID(), player.getName().getString());
+		speak(player, falsity, memory, personality, stage, playerMessage, isOwner, dialogue, action);
 	}
 
 	private void deliverOffline(Player player, FalsityEntity falsity, PlayerMemory memory, PersonalityProfile personality, HorrorStage stage, String playerMessage, boolean isOwner) {
 		if (player.isRemoved() || !player.isAlive() || falsity.isRemoved()) {
 			return;
 		}
+
 		String line = this.fallback.respond(memory, personality, stage, playerMessage, isOwner);
-		say(player, falsity, line);
-		memory.recordConversation(playerMessage, line, this.config.memory.maxRecentInteractions);
+		ActionRequest action = IntentRecognizer.recognize(playerMessage).orElse(null);
+		ActionResult actionResult = executeAction(player, falsity, action);
+
+		String reply = line;
+		if (actionResult != null && actionResult.isInformative()) {
+			// A recognised request produces a concrete answer rather than a
+			// generic personality line.
+			reply = actionResult.message();
+		}
+
+		say(player, falsity, reply);
+		memory.recordConversation(playerMessage, reply, this.config.memory.maxRecentInteractions);
 		extractFact(memory, playerMessage);
 		this.memories.save(player.getUUID());
 		this.personalities.applyEvent(player.getUUID(), player.getName().getString(), PersonalityProfile.Event.CONVERSATION);
 		this.horror.recordInteraction(player.getUUID(), player.getName().getString());
+	}
+
+	private void speak(
+		Player player,
+		FalsityEntity falsity,
+		PlayerMemory memory,
+		PersonalityProfile personality,
+		HorrorStage stage,
+		String playerMessage,
+		boolean isOwner,
+		String dialogue,
+		ActionRequest action
+	) {
+		ActionResult actionResult = executeAction(player, falsity, action);
+
+		String reply = dialogue;
+		if (actionResult != null) {
+			if (actionResult.pending() || !actionResult.success()) {
+				// A confirmation question or a failure must override the model's
+				// prose: the model cannot know the action did not happen.
+				reply = actionResult.message();
+			} else if (dialogue == null || dialogue.isBlank()) {
+				reply = actionResult.message();
+			}
+		}
+
+		say(player, falsity, reply);
+		memory.recordConversation(playerMessage, reply, this.config.memory.maxRecentInteractions);
+		extractFact(memory, playerMessage);
+		this.memories.save(player.getUUID());
+		this.personalities.applyEvent(player.getUUID(), player.getName().getString(), PersonalityProfile.Event.CONVERSATION);
+		this.horror.recordInteraction(player.getUUID(), player.getName().getString());
+	}
+
+	private ActionResult executeAction(Player player, FalsityEntity falsity, ActionRequest action) {
+		if (action == null || !action.type().isReal() || this.executor == null) {
+			return null;
+		}
+		ServerLevel level = falsity.level() instanceof ServerLevel serverLevel ? serverLevel : null;
+		if (level == null) {
+			return null;
+		}
+		ActionContext context = new ActionContext(player, falsity, level, this.config);
+		return this.executor.execute(context, action);
+	}
+
+	private static ActionRequest legacyAction(AIResponseParser.SuggestedAction action) {
+		return switch (action) {
+			case SIT -> ActionRequest.of(ActionType.SIT);
+			case FOLLOW -> ActionRequest.of(ActionType.FOLLOW);
+			case GREET -> ActionRequest.of(ActionType.GREET);
+			case NONE -> null;
+		};
 	}
 
 	/** Sends one line of dialogue to the player, prefixed with Falsity's name. */
@@ -235,38 +316,34 @@ public final class ConversationManager {
 		player.sendSystemMessage(Component.literal("<" + name + "> " + line));
 	}
 
-	private void applySuggestion(FalsityEntity falsity, AIResponseParser.SuggestedAction action) {
-		switch (action) {
-			case SIT -> falsity.setSitting(true);
-			case FOLLOW -> falsity.setSitting(false);
-			case GREET -> falsity.greet();
-			case NONE -> {
-				// No suggestion: dialogue only.
-			}
-		}
-	}
-
 	/**
 	 * Extracts simple durable facts from player messages ("my name is X",
-	 * "i like Y", "remember Z"). Local and deterministic; no API involved.
+	 * "i like Y", "remember Z", "my favourite block is X"). Local and
+	 * deterministic; no API involved.
 	 */
 	static void extractFact(PlayerMemory memory, String playerMessage) {
 		if (memory == null || playerMessage == null) {
 			return;
 		}
-		String lower = playerMessage.toLowerCase();
+		String message = playerMessage.trim();
+		String lower = message.toLowerCase();
 		if (lower.startsWith("my name is ")) {
-			String name = playerMessage.substring("my name is ".length()).trim();
+			String name = message.substring("my name is ".length()).trim();
 			if (!name.isEmpty() && name.length() <= 32) {
 				memory.recordFact("Player's name is " + name, 50);
 			}
 		} else if (lower.startsWith("i like ") || lower.startsWith("i love ") || lower.startsWith("i hate ")) {
-			String preference = playerMessage.trim();
-			if (preference.length() <= 80) {
-				memory.recordFact("Player said: " + preference, 50);
+			if (message.length() <= 80) {
+				memory.recordFact("Player said: " + message, 50);
+			}
+		} else if (lower.startsWith("my favourite ") || lower.startsWith("my favorite ")) {
+			// "my favourite block is diamond" -> a durable preference.
+			String detail = message.substring(lower.startsWith("my favourite ") ? "my favourite ".length() : "my favorite ".length()).trim();
+			if (!detail.isEmpty() && detail.length() <= 80) {
+				memory.recordFact("Player's favourite is " + detail, 50);
 			}
 		} else if (lower.startsWith("remember ")) {
-			String toRemember = playerMessage.substring("remember ".length()).trim();
+			String toRemember = message.substring("remember ".length()).trim();
 			if (!toRemember.isEmpty() && toRemember.length() <= 80) {
 				memory.recordFact("Player asked Falsity to remember: " + toRemember, 50);
 			}

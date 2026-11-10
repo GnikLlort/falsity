@@ -6,6 +6,12 @@
     "teleportDistance": 24.0,
     "followSpeed": 1.1
   },
+  "chat": {
+    "enabled": true,
+    "contextTimeoutSeconds": 120,
+    "maxConversationDistance": 32.0,
+    "maxMessageLength": 256
+  },
   "groq": {
     "enabled": true,
     "apiKey": "",
@@ -20,6 +26,25 @@
     "cooldownSeconds": 10,
     "maxRequestsPerMinute": 10,
     "maxMessageLength": 256
+  },
+  "items": {
+    "enabled": true,
+    "permissionMode": "OWNER",
+    "maxPerRequest": 64,
+    "cooldownSeconds": 15,
+    "confirmAboveCount": 128
+  },
+  "building": {
+    "enabled": true,
+    "maxDimension": 32,
+    "maxBlocks": 500,
+    "blockPlacementsPerTick": 6,
+    "requireConfirmation": true,
+    "confirmAboveBlocks": 150,
+    "inventoryBased": true,
+    "creativeGeneration": false,
+    "maxDistanceFromPlayer": 48,
+    "progressUpdateTicks": 100
   },
   "memory": {
     "maxStoredFacts": 50,

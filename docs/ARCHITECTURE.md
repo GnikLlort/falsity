@@ -94,7 +94,8 @@ of it.
 
 ### Conversations: async, validated, always answered
 
-`/falsity talk <message>` is the only path that can reach Groq. Right-click
+Two paths can reach Groq: the `/falsity talk <message>` command and ordinary
+player chat that addresses Falsity (see *Natural chat* below). Right-click
 petting never triggers a request. The flow is:
 
 1. Validate on the server thread: talking enabled, message length, per-player
@@ -115,6 +116,58 @@ The API key is resolved by `ApiKeyProvider` (environment variable, then
 `secrets.json`, then config) and sent only as a `Bearer` header. It is never
 logged, never in chat, and never synced to clients. All Groq calls are
 server-side.
+
+### Natural chat: command-free, mentioned or warm
+
+`NaturalChatListener` registers Fabric's `ServerMessageEvents.CHAT_MESSAGE`,
+which fires after a message is broadcast — so normal chat is never rewritten,
+forwarded or blocked. Per message it: strips the `<Player>` prefix, skips
+`/`-commands and over-long lines, then handles, in order:
+
+1. a pending confirmation ("yes" / "no"), even without a name mention;
+2. cancelling an active build on a negative or STOP_BUILD intent;
+3. otherwise routing only when the message mentions Falsity by name
+   (`ChatDetector.mentions`, case-insensitive whole word) or continues a warm
+   conversation (`ConversationContextManager`, timeout-bounded).
+
+`CompanionFinder` finds the Falsity *bonded to that player* within range, so a
+player can never make an unbonded or another player's Falsity answer. Only
+addressed or contextual messages reach `ConversationManager.requestConversation`
+— ordinary chatter is never sent to Groq.
+
+### Action system: allowlisted, server-authoritative
+
+`ActionType` is the allowlist: a structured action from the AI is executed only
+if its type is declared and only with declared argument keys
+(`ActionType.allowsArgs`). `AIResponseParser` extracts a JSON action
+(`[action:{"type":...,"args":{...}}]`) alongside the legacy `[action:sit|follow|greet]`
+tags; unknown types and keys are rejected. `ActionExecutor` routes a validated
+`ActionRequest` to its `ActionHandler`, turns any handler exception into a
+failure (never a crash, never a false success), and is the single gate between
+"the AI asked" and "the world changed". Offline, `IntentRecognizer` maps common
+phrases to `ActionRequest`s so requests work with no key. `ConfirmationManager`
+gates destructive requests behind a player's yes/no with a TTL.
+
+### Item assistance: real registry, honest overflow
+
+`ItemAssistance` normalises a name and resolves it against
+`BuiltInRegistries.ITEM` — an unknown name fails honestly; no id is ever invented
+or substituted. `GiveItemHandler` checks the configured permission mode, the
+per-request quantity cap and a cooldown before creating anything, asks for
+confirmation above a count threshold, splits stacks by the real max-stack size,
+and reports partial fills and overflow rather than dropping items silently.
+
+### Building: planned, validated, placed gradually
+
+`BuildPlanner` turns a request into a bounded `BuildPlan` of `BlockPlacement`s
+in front of the player. `BuildValidator` is the server's safety net: it enforces
+block-count, dimension and distance limits, requires loaded chunks, refuses a
+forbidden block set (command blocks, TNT, lava, fire, spawners…), refuses to
+overwrite solid structures, and — when inventory-based — checks the player owns
+the materials. `BuildManager` places `blockPlacementsPerTick` blocks per tick on
+the server thread via `setBlockAndUpdate`, consumes materials, reports progress
+at a configured cadence, cancels cleanly, and reports failures honestly. Builds
+larger than `confirmAboveBlocks` are confirmed first.
 
 ### Memory: per-player files, bounded, corruption-proof
 
@@ -215,6 +268,18 @@ cap. A corrupt file is left untouched and defaults are used for the session, so
 the user can still see and fix their mistake. See
 `docs/falsity.example.json` for a commented-by-structure example.
 
+The config has five blocks: `groq`, `memory`, `personality`, `horror`,
+`companion`, plus this milestone's `chat`, `items` and `building`. `chat`
+controls natural-chat enablement, the conversation context timeout, the
+mention/response range and the max message length. `items` controls item
+assistance enablement, the permission mode (creative / operator / owner /
+unrestricted / none), the per-request quantity cap, the confirmation threshold
+and a cooldown. `building` controls build enablement, the per-tick placement
+rate, block/dimension/distance limits, the confirmation threshold, the progress
+cadence and whether builds consume the player's inventory or generate materials.
+Missing keys fall back to defaults, so an existing `falsity.json` keeps working
+unchanged.
+
 Secrets do not live here. The Groq API key is read from the `GROQ_API_KEY`
 environment variable first, then from git-ignored `secrets.json` in the game
 directory (see `docs/secrets.example.json`), and only then from the empty-by-
@@ -225,7 +290,7 @@ only on the server side.
 
 | Layer | What it proves | Where |
 | --- | --- | --- |
-| Unit tests | Groq request/response parsing, failure mapping, timeouts, rate limits; AI action validation; offline fallback; memory creation/limits/retrieval/isolation; storage round-trip + corruption; personality evolution/clamping; horror thresholds/caps; cooldowns; key resolution; prompt bounds; config parsing/clamping | `src/test` |
+| Unit tests | Groq request/response parsing, failure mapping, timeouts, rate limits; AI action validation; offline fallback; memory creation/limits/retrieval/isolation; storage round-trip + corruption; personality evolution/clamping; horror thresholds/caps; cooldowns; key resolution; prompt bounds; config parsing/clamping; natural-chat detection (mention/affirm/negate); offline intent recognition; action allowlist + executor routing + exception isolation; confirmation flow; warm-context tracking; item-name normalisation; build progress wording | `src/test` |
 | Game tests | entity registers, spawns, has attributes, ticks, bonds, obeys orders, walks to its owner; memory created on bond and persisted; personality evolves on pet; horror starts at Innocence and stays capped; offline conversation records memory; per-player isolation | `src/gametest` |
 | Static asset validation | JSON validity, entrypoints exist, textures exist and match the model's UV bounds, translation keys present | `tools/validate_assets.py` |
 | Preview render | the geometry and texture actually compose into the intended creature | `tools/generate_assets.py --preview` |

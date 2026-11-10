@@ -1,9 +1,30 @@
 package com.falsity;
 
+import com.falsity.actions.ActionExecutor;
+import com.falsity.actions.ConfirmationManager;
+import com.falsity.actions.companion.ComeActionHandler;
+import com.falsity.actions.companion.FightActionHandler;
+import com.falsity.actions.companion.FollowActionHandler;
+import com.falsity.actions.companion.GreetActionHandler;
+import com.falsity.actions.companion.LookAtActionHandler;
+import com.falsity.actions.companion.ProtectActionHandler;
+import com.falsity.actions.companion.ReportThreatsActionHandler;
+import com.falsity.actions.companion.SitActionHandler;
+import com.falsity.actions.companion.StandActionHandler;
+import com.falsity.actions.companion.StayActionHandler;
+import com.falsity.actions.companion.StopFightActionHandler;
+import com.falsity.actions.companion.StopFollowActionHandler;
+import com.falsity.actions.companion.WalkToActionHandler;
+import com.falsity.actions.items.GiveItemHandler;
 import com.falsity.ai.ApiKeyProvider;
 import com.falsity.ai.ConversationManager;
 import com.falsity.ai.GroqClient;
 import com.falsity.ai.OfflineFallback;
+import com.falsity.building.BuildActionHandler;
+import com.falsity.building.BuildManager;
+import com.falsity.building.StopBuildActionHandler;
+import com.falsity.chat.ConversationContextManager;
+import com.falsity.chat.NaturalChatListener;
 import com.falsity.command.FalsityCommands;
 import com.falsity.config.FalsityConfig;
 import com.falsity.horror.HorrorManager;
@@ -35,6 +56,10 @@ public class FalsityMod implements ModInitializer {
 	private static PersonalityManager personalities;
 	private static HorrorManager horror;
 	private static ConversationManager conversations;
+	private static ActionExecutor actions;
+	private static ConfirmationManager confirmations;
+	private static BuildManager builds;
+	private static ConversationContextManager contexts;
 	private static Path gameDir;
 
 	@Override
@@ -60,6 +85,38 @@ public class FalsityMod implements ModInitializer {
 		);
 
 		FalsityCommands.initialize();
+
+		ConfirmationManager confirmationManager = new ConfirmationManager(System::currentTimeMillis);
+		BuildManager buildManager = new BuildManager();
+		ConversationContextManager contextManager =
+			new ConversationContextManager(config.chat.contextTimeoutSeconds, System::currentTimeMillis);
+
+		ActionExecutor executor = new ActionExecutor();
+		executor.register(new FollowActionHandler());
+		executor.register(new StopFollowActionHandler());
+		executor.register(new ComeActionHandler());
+		executor.register(new SitActionHandler());
+		executor.register(new StandActionHandler());
+		executor.register(new GreetActionHandler());
+		executor.register(new LookAtActionHandler());
+		executor.register(new WalkToActionHandler());
+		executor.register(new StayActionHandler());
+		executor.register(new ProtectActionHandler());
+		executor.register(new FightActionHandler());
+		executor.register(new StopFightActionHandler());
+		executor.register(new ReportThreatsActionHandler());
+		executor.register(new GiveItemHandler());
+		executor.register(new BuildActionHandler());
+		executor.register(new StopBuildActionHandler());
+
+		conversations.setActionExecutor(executor);
+
+		actions = executor;
+		confirmations = confirmationManager;
+		builds = buildManager;
+		contexts = contextManager;
+
+		NaturalChatListener.register();
 
 		boolean groqReady = config.groq.enabled && new ApiKeyProvider().resolve(config, gameDir).isPresent();
 		LOGGER.info(
@@ -108,6 +165,36 @@ public class FalsityMod implements ModInitializer {
 	/** Player-to-Falsity conversations. */
 	public static ConversationManager conversations() {
 		return conversations;
+	}
+
+	/** The server-side action executor. */
+	public static ActionExecutor actions() {
+		return actions;
+	}
+
+	/** Pending confirmations waiting for a player's answer. */
+	public static ConfirmationManager confirmations() {
+		return confirmations;
+	}
+
+	/** Currently running builds. */
+	public static BuildManager builds() {
+		return builds;
+	}
+
+	/** Warm, contextual conversations per player. */
+	public static ConversationContextManager contexts() {
+		return contexts;
+	}
+
+	/** Drops conversations and confirmations that have gone quiet. */
+	public static void expireIdleState() {
+		if (contexts != null) {
+			contexts.expire();
+		}
+		if (confirmations != null) {
+			confirmations.expire();
+		}
 	}
 
 	public static void debug(String message, Object... arguments) {
