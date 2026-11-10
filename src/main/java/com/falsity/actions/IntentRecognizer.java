@@ -177,6 +177,8 @@ public final class IntentRecognizer {
 		}
 
 		remainder = LEADING_ARTICLE.matcher(remainder).replaceFirst("");
+		// Courtesy belongs to intent, not to a Minecraft registry identifier.
+		remainder = remainder.replaceFirst("(?i)\\s+(?:please|pls|plz)$", "");
 		remainder = TRAILING_NOISE.matcher(remainder).replaceFirst("");
 		remainder = remainder.replaceAll("\\s+", " ").trim();
 		if (remainder.isEmpty() || VAGUE_ITEM.matcher(remainder).matches()) {

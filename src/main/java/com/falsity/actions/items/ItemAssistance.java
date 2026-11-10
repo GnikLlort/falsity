@@ -84,6 +84,36 @@ public final class ItemAssistance {
 	private ItemAssistance() {
 	}
 
+	/**
+	 * Resolves category requests to conservative vanilla defaults. A full armour
+	 * request deliberately returns all four pieces; other broad categories use
+	 * a compact useful kit. Explicit material words are honoured where possible.
+	 */
+	public static List<Item> resolveSelection(String rawName) {
+		String text = rawName == null ? "" : rawName.toLowerCase(Locale.ROOT).trim();
+		String material = text.contains("diamond") ? "diamond" : text.contains("iron") ? "iron"
+			: text.contains("gold") ? "golden" : text.contains("stone") ? "stone" : "iron";
+		List<String> ids;
+		if (text.matches(".*\\b(full set of )?(armour|armor)\\b.*")) {
+			String armourMaterial = material.equals("stone") ? "iron" : material;
+			ids = List.of(armourMaterial + "_helmet", armourMaterial + "_chestplate", armourMaterial + "_leggings", armourMaterial + "_boots");
+		} else if (text.matches(".*\\b(food|rations|meal)\\b.*")) ids = List.of("cooked_beef");
+		else if (text.matches(".*\\b(weapons|weapon)\\b.*")) ids = List.of(material + "_sword", "bow", "arrow");
+		else if (text.matches(".*\\b(tools|tool|mining equipment)\\b.*")) ids = List.of(material + "_pickaxe", material + "_axe", material + "_shovel");
+		else if (text.matches(".*\\b(building (blocks|materials)|building blocks)\\b.*")) ids = List.of(text.contains("stone") ? "stone" : "oak_planks");
+		else if (text.matches(".*\\b(lighting|lights)\\b.*")) ids = List.of("torch");
+		else if (text.matches(".*\\b(transportation|transport)\\b.*")) ids = List.of("minecart");
+		else if (text.matches(".*\\b(farming supplies|farm supplies)\\b.*")) ids = List.of("iron_hoe", "wheat_seeds", "water_bucket");
+		else if (text.matches(".*\\b(redstone supplies|redstone kit)\\b.*")) ids = List.of("redstone", "repeater", "comparator");
+		else if (text.matches(".*\\b(survival supplies|survival kit)\\b.*")) ids = List.of("cooked_beef", "torch", "oak_planks");
+		else if (text.matches(".*\\bwood\\b.*")) ids = List.of("oak_log");
+		else return resolve(rawName).map(List::of).orElseGet(List::of);
+
+		List<Item> result = new ArrayList<>();
+		for (String id : ids) lookup(id).ifPresent(result::add);
+		return List.copyOf(result);
+	}
+
 	/** Resolves a name like "32 diamonds" (after the number is stripped), "oak logs" or "diamond pickaxe". */
 	public static Optional<Item> resolve(String rawName) {
 		for (String candidate : candidates(rawName)) {

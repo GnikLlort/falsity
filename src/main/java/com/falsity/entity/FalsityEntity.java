@@ -4,6 +4,7 @@ import com.falsity.FalsityMod;
 import com.falsity.ai.OfflineFallback;
 import com.falsity.behaviour.CompanionBehaviour;
 import com.falsity.behaviour.FollowOwnerGoal;
+import com.falsity.behaviour.PettingCooldown;
 import com.falsity.memory.PlayerMemory;
 import com.falsity.personality.PersonalityProfile;
 import net.minecraft.core.particles.ParticleTypes;
@@ -71,6 +72,9 @@ public class FalsityEntity extends PathfinderMob {
 	private int catchUpCooldown;
 	/** Ticks left of the current greeting, used to stop it repeating. */
 	private int greetTicksLeft;
+	/** Suppresses repeated use packets from one held interaction key. */
+	private final PettingCooldown pettingCooldown = new PettingCooldown();
+	private static final int PET_COOLDOWN_TICKS = 40;
 	/** Ticks left of the current stare at the owner (horror, harmless). */
 	private int stareTicksLeft;
 	/** Ticks left before Falsity may stare again. */
@@ -333,6 +337,11 @@ public class FalsityEntity extends PathfinderMob {
 	}
 
 	private void pet(Player player) {
+		// Holding use can produce repeated server packets. Do not heal, message,
+		// animate, mutate personality, or increase horror for those repeats.
+		if (!this.pettingCooldown.tryPet(PET_COOLDOWN_TICKS)) {
+			return;
+		}
 		if (this.getHealth() < this.getMaxHealth()) {
 			this.heal(2.0F);
 		}
@@ -407,6 +416,7 @@ public class FalsityEntity extends PathfinderMob {
 		if (this.greetTicksLeft > 0) {
 			this.greetTicksLeft--;
 		}
+		this.pettingCooldown.tick();
 
 		if (this.catchUpCooldown > 0) {
 			this.catchUpCooldown--;

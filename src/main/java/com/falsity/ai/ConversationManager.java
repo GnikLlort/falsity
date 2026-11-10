@@ -231,6 +231,12 @@ public final class ConversationManager {
 			return;
 		}
 
+		// A valid conversational response must not swallow a deterministic
+		// request. Prefer one model action when it is valid; otherwise execute
+		// exactly one local action, preventing duplicate world changes.
+		if (action == null || !action.type().isReal()) {
+			action = IntentRecognizer.recognize(playerMessage).orElse(null);
+		}
 		speak(player, falsity, memory, personality, stage, playerMessage, isOwner, dialogue, action);
 	}
 

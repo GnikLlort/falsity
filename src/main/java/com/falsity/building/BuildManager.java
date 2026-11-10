@@ -107,15 +107,16 @@ public final class BuildManager {
 			BlockPlacement placement = build.plan.placements().get(build.index);
 			BlockState state = placement.state();
 
-			if (inventoryBased) {
-				Item item = BuildMaterials.itemFor(state.getBlock());
-				if (item != null && item != Items.AIR && !BuildMaterials.consume(build.player, item)) {
-					build.failed = true;
-					break;
-				}
-			}
-
+			Item material = inventoryBased ? BuildMaterials.itemFor(state.getBlock()) : null;
+			BlockState previous = build.level.getBlockState(placement.pos());
 			if (!build.level.setBlockAndUpdate(placement.pos(), state)) {
+				build.failed = true;
+				break;
+			}
+			// Consume only after confirmed placement. If inventory changed since
+			// validation, restore the old block so materials and world stay atomic.
+			if (material != null && material != Items.AIR && !BuildMaterials.consume(build.player, material)) {
+				build.level.setBlockAndUpdate(placement.pos(), previous);
 				build.failed = true;
 				break;
 			}
