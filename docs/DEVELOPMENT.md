@@ -37,11 +37,12 @@ That is deliberate — a mod whose entity cannot spawn is not a working mod.
 | --- | --- |
 | `./gradlew compileJava` | Compiles the common (server + shared) sources. Fastest syntax/API check. |
 | `./gradlew compileClientJava` | Compiles the client sources against the client-only Minecraft classes. |
-| `./gradlew test` | Runs the plain JUnit tests: config serialisation/clamping and the follow-distance arithmetic. |
+| `./gradlew test` | Runs the plain JUnit tests: config, Groq parsing/failures, AI validation, fallback, memory, personality, horror, cooldowns, key resolution, prompts. |
 | `./gradlew runGameTest` | Runs the game tests in a headless dedicated server. |
 | `./gradlew build` | Everything above, plus the jar. |
 | `./gradlew runClient` | Development client, with the mod loaded. |
 | `./gradlew runServer` | Development dedicated server. |
+| `python3 scripts/report_test_failures.py build/test-results/test` | Names the failing unit tests from the JUnit XML reports. |
 
 `./gradlew tasks` lists the rest.
 
@@ -72,6 +73,24 @@ fabricApi {
 Everything a game test needs is registered in
 `src/main/java/com/falsity/FalsityRegistries` and initialised by the normal
 mod entrypoint, which the test server loads like any other server.
+
+**A new game test class must also be registered.** The test classes are
+listed as entrypoints of the `falsity-gametest` mod in
+`src/gametest/resources/fabric.mod.json`:
+
+```json
+"entrypoints": {
+    "fabric-gametest": [
+        "com.falsity.gametest.FalsityGameTest",
+        "com.falsity.gametest.FalsityIntelligenceGameTest"
+    ]
+}
+```
+
+Without that line the class compiles, the build stays green, and the tests
+are silently never run. The server log prints how many tests it ran
+("11 tests are now running"); if that number is lower than you expect, the
+class is not registered.
 
 ## The asset pipeline
 
@@ -124,12 +143,45 @@ Rules for adding settings:
 2. Clamp it in `sanitise()` and cover the clamp with a unit test.
 3. Never put secrets in this file. See below.
 
-## Secrets
+## Secrets and Groq setup
 
-The Groq API key (Milestone 3) will be read from a separate file that is **not**
-in the repository — `.gitignore` already excludes `secrets.json`. The key will
-never be logged, never written to `config/falsity.json`, and never sent to a
-client. All API calls happen server-side and off the game threads.
+The Groq API key is resolved by `ApiKeyProvider` in this order (first
+non-empty wins):
+
+1. the `GROQ_API_KEY` environment variable (recommended for servers),
+2. `secrets.json` in the game directory — copy `docs/secrets.example.json`,
+   replace the placeholder, and keep it out of git (`.gitignore` already
+   excludes `secrets.json`),
+3. the `groq.apiKey` field in `config/falsity.json` (ships empty).
+
+The key is never logged, never written back to disk by the mod, never sent to
+a client, and never included in error messages. All API calls happen
+server-side and off the game threads (`HttpClient.sendAsync`); replies are
+scheduled back onto the server thread before any game state is touched.
+
+**How to get a key:** create a free account at <https://console.groq.com>,
+open *API Keys*, and create a key. The default model is `openai/gpt-oss-20b`;
+Groq retires models without much notice, so if replies stop arriving, check
+the console for the current model list and update `groq.model` in
+`config/falsity.json`. A full annotated example is in
+`docs/falsity.example.json`.
+
+**Manual test with a real key (never automated):**
+
+1. Set the key via one of the three methods above, then start the server.
+2. Summon and bond Falsity, stand within 16 blocks, and run
+   `/falsity talk Hello, Falsity!`. A reply should arrive within a few
+   seconds, prefixed with `<Falsity>`.
+3. Run `/falsity talk remember my favourite block is diamonds`, then talk
+   again about diamonds: Falsity should refer back to it.
+4. Run `/falsity memory` and `/falsity personality` to inspect what it kept.
+
+**Testing offline fallback:** set `groq.enabled` to `false` in
+`config/falsity.json` (or leave the key empty) and repeat step 2. Falsity
+answers from scripted lines with no network involved. To test failure paths
+without a real key, the unit tests stub the HTTP transport
+(`GroqClientTest`): timeouts, 429s, 5xx, malformed bodies and missing keys
+all map to the fallback.
 
 ## How CI verifies the mod
 
@@ -151,9 +203,18 @@ gh api repos/<owner>/<repo>/commits/$(git rev-parse HEAD)/comments --jq '.[].bod
 What a green run proves:
 
 - both source sets compile against real 26.3 classes,
-- the pure logic tests pass,
+- the pure logic tests pass (Groq parsing/failures, AI validation, fallback,
+  memory, personality, horror, cooldowns, key resolution, prompts, config),
 - a real dedicated server loads the mod, spawns Falsity, ticks it, bonds it to a
-  player, obeys sit/follow, and measures it walking towards its owner.
+  player, obeys sit/follow, measures it walking towards its owner, creates and
+  persists memory, evolves personality, caps horror progression, and answers
+  conversations offline.
+
+When a unit test fails, CI names it. `scripts/report_test_failures.py` reads
+the JUnit XML reports and prints the failing class, method and message, and
+that output is included in the commit comment alongside the counts. A build
+that says "81 tests completed, 2 failed" is not a useful report; "FAILED
+com.falsity.memory.PlayerMemoryTest.daysSinceSeenCountsCorrectly" is.
 
 What it does **not** prove: how the mob looks. Rendering needs a client, so the
 visual check is `./gradlew runClient` plus the generated preview, and the
@@ -188,6 +249,15 @@ and they are what the code relies on:
   `ItemGroupEvents`.
 - **Commands** — permission gates use `source.permissions().hasPermission(
   Permissions.COMMANDS_MODERATOR)`.
+- **Command argument types** — `StringArgumentType` and `IntegerArgumentType`
+  are no longer in `net.minecraft.commands.arguments`; use Brigadier's
+  (`com.mojang.brigadier.arguments`), which is what vanilla 26.3 itself does.
+  `EntityArgument` is still Minecraft's own class. `MessageArgument` replaced
+  the old string argument for chat messages and caps input at 256 characters.
+- **Finding entities** — `Level.getEntitiesOfClass` is gone. Use
+  `getEntities(except, aabb, predicate)` and cast the first argument to
+  `Entity`, otherwise the `null` also matches the `EntityTypeTest` overload and
+  the call is ambiguous.
 - **Game test helper** — `makeMockPlayer(GameType)` players are *not* registered
   with the level, so `level.getPlayerByUUID` cannot find them. Anything that
   resolves an owner through the level must be able to work from a cached player
@@ -196,16 +266,36 @@ and they are what the code relies on:
 
 ## Adding behaviour
 
-1. Put the AI in `src/main/java/com/falsity/behaviour` as a `Goal`, and keep the
-   thresholds in `CompanionBehaviour` (pure, unit tested).
-2. Register it in `FalsityGoals.addGoals` with an explicit priority and
+1. Put movement AI in `src/main/java/com/falsity/behaviour` as a `Goal`, and keep
+   the thresholds in `CompanionBehaviour` (pure, unit tested). Put dialogue,
+   memory, personality and horror logic in their own packages (`ai`,
+   `memory`, `personality`, `horror`) as pure classes with stubbed seams
+   (transport, clock, random) so they stay unit testable without a game.
+2. Register goals in `FalsityGoals.addGoals` with an explicit priority and
    `EnumSet` of flags.
 3. If clients need to know about it, prefer an existing synced mechanism; if
-   there is none, add a payload in the networking package (Milestone 2) rather
-   than a guessed synched-data id.
-4. Add a game test that drives the real method, not a copy of the logic.
+   there is none, add a payload in the networking package rather than a
+   guessed synched-data id.
+4. Add a unit test for the pure logic and a game test that drives the real
+   method, not a copy of the logic. A new game test **class** also has to be
+   added to the `fabric-gametest` entrypoints in
+   `src/gametest/resources/fabric.mod.json`, or it compiles and never runs.
 5. Update `docs/ARCHITECTURE.md` if the structure changed, and
    `docs/ROADMAP.md` if a milestone moved.
+
+## Known limitations (Milestone 2)
+
+- Groq models are retired without much notice. If conversations stop working
+  but offline lines still arrive, check the model id in the Groq console.
+- Memory is per-server-installation (`<gameDir>/falsity-memory/`), not
+  per-world-save: on an integrated server shared across worlds, a player's
+  memory follows them between worlds. On a dedicated server (one world per
+  install) this is equivalent to per-world.
+- Fact extraction is simple pattern matching (`my name is...`, `i like...`,
+  `remember...`). It is not NLP and will miss phrasings it does not know.
+- Horror is capped at Strange: staring and odd recollections only. The
+  director, stalking and transformation are later milestones.
+- No sounds yet: Falsity is silent apart from chat lines.
 
 ## Style
 

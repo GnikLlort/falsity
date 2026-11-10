@@ -36,10 +36,59 @@ Not in this milestone: sounds, AI conversation, memory, horror.
 
 ---
 
-## M2 — Presence and a networking spine
+## M2 — Intelligence: Groq, memory, personality, horror foundation ✅ done
 
-**Goal:** Falsity should feel alive before it can *think*, and the mod needs a
-safe way to tell clients about it.
+**Goal:** Falsity can hold a conversation, remembers each player, has a
+consistent evolving personality, and has the first harmless step of horror
+progression. (This milestone was scoped as "Milestone 2: Groq Intelligence,
+Conversations, Persistent Memory and Personality" and delivers roadmap M3 + M4
+plus the M5 foundation.)
+
+Delivered:
+
+- Server-side, asynchronous Groq client for the OpenAI-compatible
+  `https://api.groq.com/openai/v1/chat/completions` endpoint (Java `HttpClient`,
+  never on the server tick). Configurable model (default `openai/gpt-oss-20b`),
+  timeout, temperature and token limits.
+- API key from `GROQ_API_KEY`, then git-ignored `secrets.json`, then config
+  (empty by default). Never logged, never sent to clients, never in errors.
+- `/falsity talk <message>` with per-player cooldowns and a server-wide rate
+  limit. Petting never triggers a request. Silence is preserved: Falsity only
+  speaks when spoken to, plus a welcome-back line after long absences.
+- Offline fallback personality: every failure path (no key, offline, timeout,
+  rate limit, bad response) answers from scripted lines. Falsity never goes
+  silent.
+- AI output is dialogue plus at most one allowlisted suggestion
+  (sit / follow / greet), applied through the entity's own methods. Unknown
+  actions are rejected; the model can never run commands or touch game state.
+- Persistent per-player memory (`falsity-memory/<uuid>.json`): first meeting,
+  counts, facts, recent interactions, local summary, personality and horror
+  state. Atomic writes, corruption-proof, capped, isolated per player. Only
+  keyword-matched relevant memories enter prompts. `/falsity memory` inspects,
+  `/falsity memory clear <player>` (op) wipes.
+- Personality: nine traits (curiosity, affection, attachment, playfulness,
+  jealousy, suspicion, loneliness, fear, hostility) starting from config
+  defaults and evolving gradually per interaction, persisted per player.
+  `/falsity personality` inspects.
+- Horror foundation: five-stage architecture with tension→stage rules, but
+  capped at Strange (stage 1). Behaviours are harmless: rare staring and
+  occasionally recalling an old fact. `/falsity horror` inspects,
+  `/falsity horror set <player> <0-4>` (op) tests stages. Falsity never
+  becomes hostile.
+- Verification: unit tests for Groq parsing/failures, AI validation, fallback,
+  memory, personality, horror, cooldowns, key resolution and prompts; game
+  tests for memory creation/persistence, personality evolution, horror caps,
+  offline conversations and isolation. No test needs a real key or network.
+
+Not in this milestone: sounds, networking spine, horror beyond Strange,
+transformation, stalking, jumpscares.
+
+---
+
+## M3 — Presence and a networking spine
+
+**Goal:** Falsity should feel alive, and the mod needs a safe way to tell
+clients about it.
 
 Planned:
 
@@ -59,53 +108,7 @@ error.
 
 ---
 
-## M3 — Groq conversation engine
-
-**Goal:** Falsity can hold a short, in-character conversation.
-
-Planned:
-
-- Server-side, asynchronous client for the OpenAI-compatible
-  `https://api.groq.com/openai/v1/chat/completions` endpoint, using Java's HTTP
-  client. Never on the server tick thread, never on the render thread.
-- API key read from `secrets.json` in the game directory (git-ignored). Never
-  logged, never in `config/falsity.json`, never sent to a client, never in an
-  error message.
-- Prompt building with a hard token budget, a per-player rate limit, request
-  timeouts and cancellation when the player logs off.
-- Graceful degradation: if the key is missing, the request fails or the service
-  is unreachable, Falsity answers from a small offline set of lines instead of
-  breaking the game. The failure is logged once, without the key.
-- Chat delivered as in-game messages, with a config switch to turn talking off.
-
-Acceptance: a scripted game test stubs the HTTP layer (no network in CI) and
-proves the request shape, the timeout path, the rate limit and the offline
-fallback. A manual test with a real key is documented in
-`docs/DEVELOPMENT.md` but never automated.
-
----
-
-## M4 — Persistent memory
-
-**Goal:** Falsity remembers the player between sessions — and only what it needs.
-
-Planned:
-
-- Per-player, per-world memory storage (name, first meeting, notable events,
-  last conversation topics), saved through the world's data storage.
-- A summarisation step with a size cap so a long-lived world cannot grow without
-  bound; old trivia decays, important events stay.
-- Memory is server-side only and never leaves the machine except as part of a
-  prompt to the configured API.
-- A `/falsity memory` admin command to inspect and clear a player's memory.
-
-Acceptance: reconnect after a restart and Falsity refers to something from the
-previous session; a corrupt memory file is discarded with a warning instead of
-crashing the server.
-
----
-
-## M5 — The horror director
+## M4 — The horror director
 
 **Goal:** five stages that escalate on their own schedule:
 **Innocence → Strange → Suspicion → Fear → Nightmare.**
@@ -116,10 +119,12 @@ Planned:
   time spent together, distance, night, isolation and what the player has said.
 - Each stage changes behaviour, sound, animation and dialogue *policy* — not
   just text. Stage transitions are logged for debugging and configurable
-  (including turning escalation off entirely).
+  (including turning escalation off entirely). Raise the `maxStage` cap beyond
+  1 when this milestone lands.
 - Multiplayer-safe by design: the director is server-authoritative and per
   player, and a scare aimed at one player never overrides another's stage.
-- A `/falsity stage` admin command for testing every stage on demand.
+- A `/falsity stage` admin command for testing every stage on demand (the
+  `/falsity horror set` command from M2 is the seed of this).
 
 Acceptance: a game test walks one player through all five stages and asserts the
 ordering, that a second player's stage is untouched, and that escalation can be
@@ -127,7 +132,7 @@ disabled by config.
 
 ---
 
-## M6 — Stalking and jumpscares
+## M5 — Stalking and jumpscares
 
 **Goal:** the part players will remember, with the ability to switch it off.
 
@@ -150,7 +155,7 @@ that nothing in the system can move a player.
 
 ---
 
-## M7 — Transformation and polish
+## M6 — Transformation and polish
 
 **Goal:** the cute-to-nightmare transformation as the payoff, and a release.
 

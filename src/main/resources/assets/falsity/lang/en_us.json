@@ -7,7 +7,15 @@
 	"message.falsity.pet": "Falsity leans into your hand.",
 	"message.falsity.sit": "Falsity sits down and watches you.",
 	"message.falsity.follow": "Falsity stands up and pads after you.",
+	"message.falsity.no_companion": "Falsity is not nearby. It cannot hear you.",
+	"message.falsity.unavailable": "Falsity is not listening right now.",
+	"message.falsity.talking_disabled": "Falsity is not in a talking mood.",
+	"message.falsity.too_long": "That is too long. Falsity's ears are small.",
+	"message.falsity.cooldown": "Falsity needs a moment... (%s seconds)",
 
 	"command.falsity.summoned": "Falsity is here.",
-	"command.falsity.failed": "Falsity could not be placed here."
+	"command.falsity.failed": "Falsity could not be placed here.",
+	"command.falsity.players_only": "Only players can do that.",
+	"command.falsity.memory_cleared": "Falsity has forgotten everything about %s.",
+	"command.falsity.horror_set": "Falsity is now %2$s towards %1$s."
 }

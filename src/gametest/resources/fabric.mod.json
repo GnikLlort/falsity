@@ -6,7 +6,8 @@
 	"environment": "*",
 	"entrypoints": {
 		"fabric-gametest": [
-			"com.falsity.gametest.FalsityGameTest"
+			"com.falsity.gametest.FalsityGameTest",
+			"com.falsity.gametest.FalsityIntelligenceGameTest"
 		]
 	},
 	"depends": {

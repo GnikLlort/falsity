@@ -3,7 +3,7 @@
 	"id": "falsity",
 	"version": "${version}",
 	"name": "Falsity",
-	"description": "An original companion that is not quite what it seems. Milestone 1: the creature itself exists, moves and can be befriended.",
+	"description": "An original AI horror companion that is not quite what it seems. Milestone 2: Falsity talks (Groq with offline fallback), remembers each player, and has an evolving personality.",
 	"authors": [
 		"GnikLlort"
 	],
