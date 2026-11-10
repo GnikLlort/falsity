@@ -6,13 +6,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.phys.AABB;
 
 /**
@@ -115,13 +119,14 @@ public final class BuildValidator {
 	}
 
 	private static boolean chunksLoaded(ServerLevel level, AABB region) {
-		int minChunkX = level.getChunkPos(region.minX, region.minZ).getX();
-		int maxChunkX = level.getChunkPos(region.maxX, region.maxZ).getX();
-		int minChunkZ = level.getChunkPos(region.minX, region.minZ).getZ();
-		int maxChunkZ = level.getChunkPos(region.maxX, region.maxZ).getZ();
-		for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
-			for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
-				if (!level.isChunkLoaded(chunkX, chunkZ)) {
+		ChunkPos minChunk = ChunkPos.containing(new BlockPos(
+			(int) Math.floor(region.minX), 0, (int) Math.floor(region.minZ)));
+		ChunkPos maxChunk = ChunkPos.containing(new BlockPos(
+			(int) Math.floor(region.maxX), 0, (int) Math.floor(region.maxZ)));
+		for (int chunkX = minChunk.x(); chunkX <= maxChunk.x(); chunkX++) {
+			for (int chunkZ = minChunk.z(); chunkZ <= maxChunk.z(); chunkZ++) {
+				// A null chunk means it is not loaded at full status yet.
+				if (level.getChunk(chunkX, chunkZ, ChunkStatus.FULL, false) == null) {
 					return false;
 				}
 			}
@@ -142,7 +147,8 @@ public final class BuildValidator {
 
 	private static Optional<String> blockId(BlockState state) {
 		try {
-			return BuiltInRegistries.BLOCK.getKey(state.getBlock()).map(Identifier::toString);
+			Identifier key = BuiltInRegistries.BLOCK.getKey(state.getBlock());
+			return key == null ? Optional.empty() : Optional.of(key.toString());
 		} catch (RuntimeException missing) {
 			return Optional.empty();
 		}
@@ -165,7 +171,8 @@ public final class BuildValidator {
 
 	private static String describeItem(Item item) {
 		try {
-			String id = BuiltInRegistries.ITEM.getKey(item).map(Identifier::toString).orElse("materials");
+			Identifier key = BuiltInRegistries.ITEM.getKey(item);
+			String id = key == null ? "materials" : key.toString();
 			int colon = id.indexOf(':');
 			return colon >= 0 ? id.substring(colon + 1).replace('_', ' ') : id;
 		} catch (RuntimeException missing) {

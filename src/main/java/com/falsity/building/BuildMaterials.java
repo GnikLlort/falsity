@@ -2,7 +2,6 @@ package com.falsity.building;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Optional;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.player.Player;
@@ -38,7 +37,9 @@ public final class BuildMaterials {
 	/** How many of an item the player is carrying. */
 	public static int count(Player player, Item item) {
 		int total = 0;
-		for (ItemStack stack : player.getInventory().items()) {
+		var inventory = player.getInventory();
+		for (int slot = 0; slot < inventory.getContainerSize(); slot++) {
+			ItemStack stack = inventory.getItem(slot);
 			if (stack.getItem() == item) {
 				total += stack.getCount();
 			}
@@ -49,8 +50,8 @@ public final class BuildMaterials {
 	/** Removes one item from the player's inventory. Returns false if they have none. */
 	public static boolean consume(Player player, Item item) {
 		var inventory = player.getInventory();
-		for (int slot = 0; slot < inventory.items().size(); slot++) {
-			ItemStack stack = inventory.items().get(slot);
+		for (int slot = 0; slot < inventory.getContainerSize(); slot++) {
+			ItemStack stack = inventory.getItem(slot);
 			if (stack.getItem() == item && stack.getCount() > 0) {
 				ItemStack remainder = stack.split(1);
 				inventory.setItem(slot, stack);
@@ -63,11 +64,11 @@ public final class BuildMaterials {
 	/** The item form of a block, or {@link Items#AIR} when it has none. */
 	static Item itemFor(Block block) {
 		try {
-			Optional<Identifier> key = BuiltInRegistries.BLOCK.getKey(block);
-			if (key.isEmpty()) {
+			Identifier key = BuiltInRegistries.BLOCK.getKey(block);
+			if (key == null) {
 				return Items.AIR;
 			}
-			return BuiltInRegistries.ITEM.getOptional(key.get()).orElse(Items.AIR);
+			return BuiltInRegistries.ITEM.getOptional(key).orElse(Items.AIR);
 		} catch (RuntimeException missing) {
 			return Items.AIR;
 		}
