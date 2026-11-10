@@ -64,6 +64,9 @@ mod, spawns Falsity, ticks it, bonds it to a player, exercises the sit/follow
 orders, measures it walking towards its owner, and verifies memory, personality,
 horror and offline conversations. If any of that fails, the build fails.
 
+At the time of writing that is 82 unit tests and 11 game tests (6 from the
+first milestone, 5 from this one).
+
 How the verification is reported, and what it does and does not prove, is
 described in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 

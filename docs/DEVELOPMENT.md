@@ -42,6 +42,7 @@ That is deliberate — a mod whose entity cannot spawn is not a working mod.
 | `./gradlew build` | Everything above, plus the jar. |
 | `./gradlew runClient` | Development client, with the mod loaded. |
 | `./gradlew runServer` | Development dedicated server. |
+| `python3 scripts/report_test_failures.py build/test-results/test` | Names the failing unit tests from the JUnit XML reports. |
 
 `./gradlew tasks` lists the rest.
 
@@ -72,6 +73,24 @@ fabricApi {
 Everything a game test needs is registered in
 `src/main/java/com/falsity/FalsityRegistries` and initialised by the normal
 mod entrypoint, which the test server loads like any other server.
+
+**A new game test class must also be registered.** The test classes are
+listed as entrypoints of the `falsity-gametest` mod in
+`src/gametest/resources/fabric.mod.json`:
+
+```json
+"entrypoints": {
+    "fabric-gametest": [
+        "com.falsity.gametest.FalsityGameTest",
+        "com.falsity.gametest.FalsityIntelligenceGameTest"
+    ]
+}
+```
+
+Without that line the class compiles, the build stays green, and the tests
+are silently never run. The server log prints how many tests it ran
+("11 tests are now running"); if that number is lower than you expect, the
+class is not registered.
 
 ## The asset pipeline
 
@@ -191,6 +210,12 @@ What a green run proves:
   persists memory, evolves personality, caps horror progression, and answers
   conversations offline.
 
+When a unit test fails, CI names it. `scripts/report_test_failures.py` reads
+the JUnit XML reports and prints the failing class, method and message, and
+that output is included in the commit comment alongside the counts. A build
+that says "81 tests completed, 2 failed" is not a useful report; "FAILED
+com.falsity.memory.PlayerMemoryTest.daysSinceSeenCountsCorrectly" is.
+
 What it does **not** prove: how the mob looks. Rendering needs a client, so the
 visual check is `./gradlew runClient` plus the generated preview, and the
 `docs/images/falsity_model_preview.png` sheet in the README.
@@ -224,6 +249,15 @@ and they are what the code relies on:
   `ItemGroupEvents`.
 - **Commands** — permission gates use `source.permissions().hasPermission(
   Permissions.COMMANDS_MODERATOR)`.
+- **Command argument types** — `StringArgumentType` and `IntegerArgumentType`
+  are no longer in `net.minecraft.commands.arguments`; use Brigadier's
+  (`com.mojang.brigadier.arguments`), which is what vanilla 26.3 itself does.
+  `EntityArgument` is still Minecraft's own class. `MessageArgument` replaced
+  the old string argument for chat messages and caps input at 256 characters.
+- **Finding entities** — `Level.getEntitiesOfClass` is gone. Use
+  `getEntities(except, aabb, predicate)` and cast the first argument to
+  `Entity`, otherwise the `null` also matches the `EntityTypeTest` overload and
+  the call is ambiguous.
 - **Game test helper** — `makeMockPlayer(GameType)` players are *not* registered
   with the level, so `level.getPlayerByUUID` cannot find them. Anything that
   resolves an owner through the level must be able to work from a cached player
@@ -243,7 +277,9 @@ and they are what the code relies on:
    there is none, add a payload in the networking package rather than a
    guessed synched-data id.
 4. Add a unit test for the pure logic and a game test that drives the real
-   method, not a copy of the logic.
+   method, not a copy of the logic. A new game test **class** also has to be
+   added to the `fabric-gametest` entrypoints in
+   `src/gametest/resources/fabric.mod.json`, or it compiles and never runs.
 5. Update `docs/ARCHITECTURE.md` if the structure changed, and
    `docs/ROADMAP.md` if a milestone moved.
 

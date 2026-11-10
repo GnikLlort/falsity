@@ -234,6 +234,11 @@ No test needs a real Groq key or network access: the HTTP transport is
 stubbed and the game tests exercise the offline path. A manual test with a
 real key is documented in [DEVELOPMENT.md](DEVELOPMENT.md).
 
+Game test classes are registered as `fabric-gametest` entrypoints in
+`src/gametest/resources/fabric.mod.json`; a class that is not listed there
+compiles but is never run, so the server log's "N tests are now running"
+count is the thing to check when a new test seems to be missing.
+
 Nothing in the test suite can prove how the model *looks* in the running client;
 that requires a client with a display. See [DEVELOPMENT.md](DEVELOPMENT.md) for
 what remains a manual check.
