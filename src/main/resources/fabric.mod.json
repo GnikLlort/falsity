@@ -1,0 +1,32 @@
+{
+	"schemaVersion": 1,
+	"id": "falsity",
+	"version": "${version}",
+	"name": "Falsity",
+	"description": "An original companion that is not quite what it seems. Milestone 1: the creature itself exists, moves and can be befriended.",
+	"authors": [
+		"GnikLlort"
+	],
+	"contact": {
+		"homepage": "https://github.com/GnikLlort/falsity",
+		"sources": "https://github.com/GnikLlort/falsity",
+		"issues": "https://github.com/GnikLlort/falsity/issues"
+	},
+	"license": "MIT",
+	"icon": "assets/falsity/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"com.falsity.FalsityMod"
+		],
+		"client": [
+			"com.falsity.client.FalsityClient"
+		]
+	},
+	"depends": {
+		"fabricloader": ">=0.20.1",
+		"minecraft": "~26.3",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}

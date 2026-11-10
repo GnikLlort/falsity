@@ -1,0 +1,13 @@
+{
+	"entity.falsity.falsity": "Falsity",
+	"item.falsity.falsity_spawn_egg": "Falsity Spawn Egg",
+
+	"message.falsity.bonded": "Falsity blinks up at you. It does not look away.",
+	"message.falsity.not_yours": "Falsity tilts its head at you, then turns back to its owner.",
+	"message.falsity.pet": "Falsity leans into your hand.",
+	"message.falsity.sit": "Falsity sits down and watches you.",
+	"message.falsity.follow": "Falsity stands up and pads after you.",
+
+	"command.falsity.summoned": "Falsity is here.",
+	"command.falsity.failed": "Falsity could not be placed here."
+}
