@@ -44,7 +44,8 @@ public final class ReportThreatsActionHandler implements ActionHandler {
 
 	private static String typeLabel(EntityType<?> type) {
 		try {
-			String id = BuiltInRegistries.ENTITY_TYPE.getKey(type).map(Identifier::toString).orElse("hostile mob");
+			Identifier key = BuiltInRegistries.ENTITY_TYPE.getKey(type);
+			String id = key == null ? "hostile mob" : key.toString();
 			int colon = id.indexOf(':');
 			return colon >= 0 ? id.substring(colon + 1) : id;
 		} catch (RuntimeException missing) {
