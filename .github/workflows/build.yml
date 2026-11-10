@@ -91,6 +91,13 @@ jobs:
             echo "== tasks executed by the build =="
             grep -E "^> Task " build.log | tail -60
             echo
+            echo "== unit test results =="
+            grep -h -o 'tests="[0-9]*" skipped="[0-9]*" failures="[0-9]*" errors="[0-9]*"' \
+              build/test-results/test/*.xml 2>/dev/null || echo "no unit test result files"
+            echo
+            echo "== game tests =="
+            grep -i -E "tests are now running|GAME TESTS COMPLETE|required tests|tests failed" build.log | head -20
+            echo
             echo "== errors and warnings =="
             grep -n -E "error:|warning:|FAILURE|Caused by|Execution failed" build.log | head -80
             echo

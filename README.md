@@ -52,7 +52,13 @@ checked against <https://fabricmc.net/develop> on 2026-11-10.
 ```
 
 The jar lands in `build/libs/`. The same task compiles both source sets, runs the
-unit tests and runs the server-side game tests.
+unit tests and runs the server-side game tests: a real headless server loads the
+mod, spawns Falsity, ticks it, bonds it to a player, exercises the sit/follow
+orders and measures it walking towards its owner. If any of that fails, the build
+fails.
+
+How the verification is reported, and what it does and does not prove, is
+described in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## Running it
 
