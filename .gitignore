@@ -29,8 +29,11 @@ replay_*.log
 *.hprof
 *.jfr
 
-# Secrets — never commit credentials of any kind
-config/
+# Secrets — never commit credentials of any kind.
+# Note: the mod's own configuration lives in the Minecraft instance's config
+# directory, never in this repository, so no config path is ignored here (an
+# unanchored "config/" rule would also exclude the Java package
+# com/falsity/config and silently drop source files).
 secrets.json
 *.secret
 .env

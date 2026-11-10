@@ -5,6 +5,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build, test and validate
@@ -35,9 +38,12 @@ jobs:
         run: python3 tools/validate_assets.py
 
       # Compiles both source sets, runs the unit tests and runs the server game
-      # tests (Loom wires the game tests into `build`).
+      # tests (Loom wires the game tests into `build`). The full output is kept so
+      # it can be published when something fails.
       - name: Build and test
-        run: ./gradlew build --stacktrace --warning-mode summary
+        run: |
+          set -o pipefail
+          ./gradlew build --stacktrace --warning-mode summary 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
 
       - name: Upload the mod jar
         uses: actions/upload-artifact@v7
@@ -45,6 +51,21 @@ jobs:
           name: falsity-jar
           path: build/libs/
           if-no-files-found: error
+
+      # GitHub's log-download endpoints are not always reachable from every
+      # environment, so on failure the full log is also pushed to a branch that
+      # can be fetched with plain git.
+      - name: Publish the build log to the ci-log branch
+        if: failure()
+        run: |
+          mkdir -p "$RUNNER_TEMP/ci-log"
+          cd "$RUNNER_TEMP/ci-log"
+          git init -q
+          git checkout -q -b ci-log
+          cp "$GITHUB_WORKSPACE/build.log" build.log 2>/dev/null || echo "no build log captured" > build.log
+          git add build.log
+          git -c user.name="falsity-ci" -c user.email="ci@users.noreply.github.com" commit -qm "CI log for ${GITHUB_SHA}"
+          git push -q -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ci-log
 
       - name: Upload test reports on failure
         if: failure()
@@ -54,5 +75,4 @@ jobs:
           path: |
             **/build/reports/
             **/build/test-results/
-            build/run-gametest/
           if-no-files-found: warn
