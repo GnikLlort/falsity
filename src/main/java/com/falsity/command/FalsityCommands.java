@@ -33,10 +33,12 @@ public final class FalsityCommands {
 		Vec3 position = source.getPosition();
 
 		FalsityEntity falsity = new FalsityEntity(FalsityRegistries.FALSITY, level);
-		falsity.moveTo(
-			position.x, position.y, position.z,
-			source.getRotation().y, 0.0F
-		);
+		falsity.setPos(position.x, position.y, position.z);
+
+		if (source.getEntity() != null) {
+			falsity.setYRot(source.getEntity().getYRot());
+			falsity.setYHeadRot(source.getEntity().getYRot());
+		}
 
 		if (!level.addFreshEntity(falsity)) {
 			source.sendFailure(Component.translatable("command.falsity.failed"));

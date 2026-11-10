@@ -52,7 +52,7 @@ public class FalsityEntity extends PathfinderMob {
 
 	@Override
 	protected void registerGoals() {
-		FalsityGoals.registerGoals(this);
+		FalsityGoals.addGoals(this, this.goalSelector);
 	}
 
 	@Override

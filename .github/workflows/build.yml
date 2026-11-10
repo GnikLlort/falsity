@@ -37,13 +37,21 @@ jobs:
       - name: Validate resources statically
         run: python3 tools/validate_assets.py
 
-      # Compiles both source sets, runs the unit tests and runs the server game
-      # tests (Loom wires the game tests into `build`). The full output is kept so
-      # it can be published when something fails.
-      - name: Build and test
-        run: |
-          set -o pipefail
-          ./gradlew build --stacktrace --warning-mode summary 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+      # Split into stages so a failure names the stage it came from, and so each
+      # stage has its own annotation budget (GitHub surfaces only the first
+      # handful of errors per step).
+      - name: Compile the common sources
+        run: ./gradlew compileJava --stacktrace 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+
+      - name: Compile the client sources
+        run: ./gradlew compileClientJava --stacktrace 2>&1 | tee -a "$GITHUB_WORKSPACE/build.log"
+
+      - name: Run unit tests
+        run: ./gradlew test --stacktrace 2>&1 | tee -a "$GITHUB_WORKSPACE/build.log"
+
+      # This also runs the server game tests: Loom wires them into `build`.
+      - name: Build and run game tests
+        run: ./gradlew build --stacktrace --warning-mode summary 2>&1 | tee -a "$GITHUB_WORKSPACE/build.log"
 
       - name: Upload the mod jar
         uses: actions/upload-artifact@v7
@@ -52,20 +60,23 @@ jobs:
           path: build/libs/
           if-no-files-found: error
 
-      # GitHub's log-download endpoints are not always reachable from every
-      # environment, so on failure the full log is also pushed to a branch that
-      # can be fetched with plain git.
-      - name: Publish the build log to the ci-log branch
+      # GitHub's log-download endpoints are not reachable from every
+      # environment, so on failure the relevant part of the log is also posted as
+      # a commit comment, which plain `gh api` can read back.
+      - name: Publish the failure log as a commit comment
         if: failure()
         run: |
-          mkdir -p "$RUNNER_TEMP/ci-log"
-          cd "$RUNNER_TEMP/ci-log"
-          git init -q
-          git checkout -q -b ci-log
-          cp "$GITHUB_WORKSPACE/build.log" build.log 2>/dev/null || echo "no build log captured" > build.log
-          git add build.log
-          git -c user.name="falsity-ci" -c user.email="ci@users.noreply.github.com" commit -qm "CI log for ${GITHUB_SHA}"
-          git push -q -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ci-log
+          if [ ! -f build.log ]; then
+            echo "No build log was captured."
+            exit 0
+          fi
+          grep -n -E "error:|warning:|FAILURE|Caused by|Execution failed|> Task .*FAILED|^\s+at " build.log \
+            | head -400 > failure.log || cp build.log failure.log
+          if [ ! -s failure.log ]; then
+            tail -200 build.log > failure.log
+          fi
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+            -f body="$(cat failure.log)" > /dev/null || echo "could not post the log comment"
 
       - name: Upload test reports on failure
         if: failure()
