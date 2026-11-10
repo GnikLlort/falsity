@@ -63,20 +63,30 @@ jobs:
       # GitHub's log-download endpoints are not reachable from every
       # environment, so on failure the relevant part of the log is also posted as
       # a commit comment, which plain `gh api` can read back.
-      - name: Publish the failure log as a commit comment
-        if: failure()
+      # GitHub's log-download endpoints are not reachable from every
+      # environment, so the relevant part of the log is also posted as a commit
+      # comment, which plain `gh api` can read back.
+      - name: Publish the build log as a commit comment
+        if: always()
         run: |
           if [ ! -f build.log ]; then
             echo "No build log was captured."
             exit 0
           fi
-          grep -n -E "error:|warning:|FAILURE|Caused by|Execution failed|> Task .*FAILED|^\s+at " build.log \
-            | head -400 > failure.log || cp build.log failure.log
-          if [ ! -s failure.log ]; then
-            tail -200 build.log > failure.log
-          fi
+          {
+            echo "Build result for ${GITHUB_SHA}"
+            echo
+            echo "== game tests and task outcomes =="
+            grep -E "GameTest|gametest|BUILD SUCCESSFUL|BUILD FAILED|> Task .*(FAILED|NO-SOURCE)|tests completed|Test run" build.log | tail -80
+            echo
+            echo "== errors and warnings =="
+            grep -n -E "error:|warning:|FAILURE|Caused by|Execution failed|at net\.|at com\." build.log | head -200
+            echo
+            echo "== tail =="
+            tail -60 build.log
+          } > summary.log 2>&1 || cp build.log summary.log
           gh api -X POST "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
-            -f body="$(cat failure.log)" > /dev/null || echo "could not post the log comment"
+            -f body="$(cat summary.log)" > /dev/null || echo "could not post the log comment"
 
       - name: Upload test reports on failure
         if: failure()

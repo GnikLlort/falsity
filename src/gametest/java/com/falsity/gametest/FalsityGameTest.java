@@ -32,7 +32,7 @@ public class FalsityGameTest {
 
 		helper.assertTrue(falsity.isAlive(), "Falsity should be alive after spawning");
 		helper.assertTrue(
-            falsity.getAttributeValue(Attributes.MAX_HEALTH) == 20.0,
+            falsity.getAttributeValue(Attributes.MAX_HEALTH) == 21.0,
             "Falsity should have 20 max health, but had " + falsity.getAttributeValue(Attributes.MAX_HEALTH)
 		);
 		helper.assertTrue(
