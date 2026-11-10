@@ -7,9 +7,12 @@ import com.falsity.entity.FalsityEntity;
 import com.falsity.horror.HorrorStage;
 import com.falsity.memory.MemorySummarizer;
 import com.falsity.memory.PlayerMemory;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -17,12 +20,11 @@ import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.arguments.EntityArgument;
-import net.minecraft.commands.arguments.IntegerArgumentType;
-import net.minecraft.commands.arguments.StringArgumentType;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.permissions.Permissions;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
@@ -292,7 +294,15 @@ public final class FalsityCommands {
 			position.x - TALK_RANGE, position.y - TALK_RANGE, position.z - TALK_RANGE,
 			position.x + TALK_RANGE, position.y + TALK_RANGE, position.z + TALK_RANGE
 		);
-		List<FalsityEntity> candidates = level.getEntitiesOfClass(FalsityEntity.class, box, falsity -> falsity.isBondedTo(player.getUUID()));
+		List<Entity> nearby = level.getEntities(null, box, entity ->
+			entity instanceof FalsityEntity falsity && falsity.isBondedTo(player.getUUID()));
+
+		List<FalsityEntity> candidates = new ArrayList<>();
+		for (Entity entity : nearby) {
+			if (entity instanceof FalsityEntity falsity) {
+				candidates.add(falsity);
+			}
+		}
 		if (candidates.isEmpty()) {
 			return Optional.empty();
 		}
