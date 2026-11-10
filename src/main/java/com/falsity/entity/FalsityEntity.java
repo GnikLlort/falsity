@@ -4,13 +4,13 @@ import com.falsity.FalsityMod;
 import com.falsity.behaviour.CompanionBehaviour;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.network.chat.Component;
-import net.minecraft.network.syncher.SynchedEntityData;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.AnimationState;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.PathfinderMob;
+import net.minecraft.world.entity.Pose;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.storage.ValueInput;
@@ -27,8 +27,10 @@ import java.util.UUID;
  * told to, and catches up if left behind.
  *
  * <p>The server decides everything: bonding, sitting and the position Falsity
- * ends up in when it catches up. Clients are sent the synced data and the
- * entity events that start an animation, and nothing else.
+ * ends up in when it catches up. The only state the client needs is whether
+ * Falsity is sitting, and that rides on vanilla's synched pose rather than a
+ * custom data slot; the owning player stays server-side state. The greeting
+ * animation is started by an entity event.
  */
 public class FalsityEntity extends PathfinderMob {
 	/** Entity event id used to start the greeting animation on clients. */
@@ -38,6 +40,15 @@ public class FalsityEntity extends PathfinderMob {
 	public final AnimationState idleAnimationState = new AnimationState();
 	/** One-shot perk of the ears and a little hop, played when Falsity is petted. */
 	public final AnimationState greetAnimationState = new AnimationState();
+
+	/**
+	 * UUID of the player Falsity bonded with, or an empty string.
+	 *
+	 * <p>This is server state only: it is saved with the entity and never synced
+	 * to clients, so a malformed value can never break a client's copy of the
+	 * entity. Kept as a string so loading a damaged save cannot throw.
+	 */
+	private String ownerId = "";
 
 	/** Ticks left before Falsity may catch up with its owner again. */
 	private int catchUpCooldown;
@@ -55,19 +66,12 @@ public class FalsityEntity extends PathfinderMob {
 		FalsityGoals.addGoals(this, this.goalSelector);
 	}
 
-	@Override
-	protected void defineSynchedData(SynchedEntityData.Builder builder) {
-		super.defineSynchedData(builder);
-		builder.define(FalsityEntityData.OWNER, "");
-		builder.define(FalsityEntityData.SITTING, false);
-	}
-
 	// ----------------------------------------------------------------------
 	// Bond and orders
 	// ----------------------------------------------------------------------
 
 	public Optional<UUID> getOwnerUuid() {
-		String stored = this.entityData.get(FalsityEntityData.OWNER);
+		String stored = this.ownerId;
 
 		if (stored.isEmpty()) {
 			return Optional.empty();
@@ -91,17 +95,24 @@ public class FalsityEntity extends PathfinderMob {
 
 	/** Bonds Falsity to a player. Called on the server only. */
 	public void bondTo(Player player) {
-		this.entityData.set(FalsityEntityData.OWNER, player.getUUID().toString());
+		this.ownerId = player.getUUID().toString();
 		this.setPersistenceRequired();
 		FalsityMod.debug("Falsity bonded to {}", player.getName().getString());
 	}
 
+	/**
+	 * Whether Falsity is sitting.
+	 *
+	 * <p>Sitting is expressed as the vanilla {@link Pose#SITTING} pose, which the
+	 * game already syncs to clients for us, so the renderer and the animation
+	 * code can read it on both sides without a custom data slot.
+	 */
 	public boolean isSitting() {
-		return this.entityData.get(FalsityEntityData.SITTING);
+		return this.getPose() == Pose.SITTING;
 	}
 
 	public void setSitting(boolean sitting) {
-		this.entityData.set(FalsityEntityData.SITTING, sitting);
+		this.setPose(sitting ? Pose.SITTING : Pose.STANDING);
 
 		if (sitting) {
 			this.getNavigation().stop();
@@ -267,7 +278,7 @@ public class FalsityEntity extends PathfinderMob {
 	@Override
 	protected void addAdditionalSaveData(ValueOutput output) {
 		super.addAdditionalSaveData(output);
-		output.putString("Owner", this.entityData.get(FalsityEntityData.OWNER));
+		output.putString("Owner", this.ownerId);
 		output.putBoolean("Sitting", isSitting());
 		output.putInt("CatchUpCooldown", this.catchUpCooldown);
 	}
@@ -275,7 +286,7 @@ public class FalsityEntity extends PathfinderMob {
 	@Override
 	protected void readAdditionalSaveData(ValueInput input) {
 		super.readAdditionalSaveData(input);
-		this.entityData.set(FalsityEntityData.OWNER, input.getStringOr("Owner", ""));
+		this.ownerId = input.getStringOr("Owner", "");
 		setSitting(input.getBooleanOr("Sitting", false));
 		this.catchUpCooldown = input.getIntOr("CatchUpCooldown", 0);
 	}

@@ -70,12 +70,9 @@ jobs:
           path: build/libs/
           if-no-files-found: error
 
-      # GitHub's log-download endpoints are not reachable from every
-      # environment, so on failure the relevant part of the log is also posted as
-      # a commit comment, which plain `gh api` can read back.
-      # GitHub's log-download endpoints are not reachable from every
-      # environment, so the relevant part of the log is also posted as a commit
-      # comment, which plain `gh api` can read back.
+      # GitHub's log-download endpoints are not reachable from every environment,
+      # so the relevant part of the log is also posted as a commit comment, which
+      # plain `gh api` can read back.
       - name: Publish the build log as a commit comment
         if: always()
         env:
@@ -95,7 +92,10 @@ jobs:
             grep -E "^> Task " build.log | tail -60
             echo
             echo "== errors and warnings =="
-            grep -n -E "error:|warning:|FAILURE|Caused by|Execution failed|at net\.|at com\." build.log | head -200
+            grep -n -E "error:|warning:|FAILURE|Caused by|Execution failed" build.log | head -80
+            echo
+            echo "== stack traces around the first failures =="
+            grep -n -A20 -B4 -E "Caused by|failed at|Exception in thread|IllegalArgumentException" build.log | head -120
             echo
             echo "== tail =="
             tail -60 build.log

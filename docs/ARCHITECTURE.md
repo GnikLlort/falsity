@@ -29,9 +29,8 @@
 FalsityMod            entrypoint: load config, register, log
 FalsityRegistries     entity type, attributes, spawn egg, creative tab
 entity/
-  FalsityEntity       the mob: synced state, interaction, ticking, persistence
+  FalsityEntity       the mob: bond state, interaction, ticking, persistence
   FalsityAttributes   default attribute supplier
-  FalsityEntityData   synced data accessors (owner, sitting)
   FalsityGoals        goal priorities in one place
 behaviour/
   CompanionBehaviour  pure follow/teleport rules (unit tested)
@@ -50,9 +49,19 @@ behaves without fighting vanilla assumptions.
 
 ### Server-authoritative ownership
 
-The owner's UUID is stored in a synced data accessor as a **string**, not as a
-UUID object. A malformed value can therefore never throw while a client decodes
-it; `getOwnerUuid()` parses defensively and logs once if the value is unusable.
+The owner's UUID is **server-side state only**, stored on the entity as a string
+and saved with it. Nothing about the owner is synced to clients in this
+milestone: the client does not need it yet, and keeping it off the network means
+a damaged or unexpected value can never break a client's copy of the entity.
+`getOwnerUuid()` still parses defensively and logs if the stored value is
+unusable.
+
+Sitting is the one piece of state the client genuinely needs (it changes the
+pose the renderer draws). It is expressed as vanilla's `Pose.SITTING`, which the
+game already syncs, instead of a custom synched-data slot — fewer moving parts,
+and no hand-rolled data accessor whose numeric id could ever collide. A proper
+client sync layer arrives with the horror-stage networking, where it will be a
+payload with an explicit schema rather than a guessed entity-data id.
 
 Bonding, sitting and catch-up teleports all happen inside
 `FalsityEntity.interactWith` / `tick`, on the server only. Game tests drive
