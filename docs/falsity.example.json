@@ -1,0 +1,49 @@
+{
+  "debugLogging": false,
+  "companion": {
+    "followOwner": true,
+    "followStartDistance": 6.0,
+    "teleportDistance": 24.0,
+    "followSpeed": 1.1
+  },
+  "groq": {
+    "enabled": true,
+    "apiKey": "",
+    "model": "openai/gpt-oss-20b",
+    "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+    "timeoutSeconds": 15,
+    "maxTokens": 150,
+    "temperature": 0.7
+  },
+  "conversation": {
+    "enabled": true,
+    "cooldownSeconds": 10,
+    "maxRequestsPerMinute": 10,
+    "maxMessageLength": 256
+  },
+  "memory": {
+    "maxStoredFacts": 50,
+    "maxRecentInteractions": 20,
+    "maxSummaryChars": 1000,
+    "retentionDays": 365
+  },
+  "personality": {
+    "curiosity": 70,
+    "affection": 60,
+    "attachment": 40,
+    "playfulness": 50,
+    "jealousy": 10,
+    "suspicion": 5,
+    "loneliness": 20,
+    "fear": 5,
+    "hostility": 0,
+    "evolutionRate": 1.0
+  },
+  "horror": {
+    "enabled": true,
+    "progressionSpeed": 1.0,
+    "maxStage": 1,
+    "allowStaring": true,
+    "allowUnsettlingLines": true
+  }
+}

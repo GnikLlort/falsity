@@ -1,7 +1,10 @@
 package com.falsity.entity;
 
 import com.falsity.FalsityMod;
+import com.falsity.ai.OfflineFallback;
 import com.falsity.behaviour.CompanionBehaviour;
+import com.falsity.memory.PlayerMemory;
+import com.falsity.personality.PersonalityProfile;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
@@ -62,6 +65,10 @@ public class FalsityEntity extends PathfinderMob {
 	private int catchUpCooldown;
 	/** Ticks left of the current greeting, used to stop it repeating. */
 	private int greetTicksLeft;
+	/** Ticks left of the current stare at the owner (horror, harmless). */
+	private int stareTicksLeft;
+	/** Ticks left before Falsity may stare again. */
+	private int stareCooldownTicks;
 
 	public FalsityEntity(EntityType<? extends FalsityEntity> entityType, Level level) {
 		super(entityType, level);
@@ -115,6 +122,28 @@ public class FalsityEntity extends PathfinderMob {
 		this.cachedOwner = player;
 		this.setPersistenceRequired();
 		FalsityMod.debug("Falsity bonded to {}", player.getName().getString());
+		recordFirstMeeting(player);
+	}
+
+	/**
+	 * Records the first meeting in persistent memory. Defensive: memory is a
+	 * nice-to-have, never a reason for bonding to fail.
+	 */
+	private void recordFirstMeeting(Player player) {
+		if (FalsityMod.memories() == null || FalsityMod.personalities() == null || FalsityMod.horror() == null) {
+			return;
+		}
+		try {
+			String name = player.getName().getString();
+			PlayerMemory memory = FalsityMod.memories().getOrCreate(player.getUUID(), name);
+			memory.touch(System.currentTimeMillis());
+			memory.recordFact("First met Falsity.", FalsityMod.config().memory.maxStoredFacts);
+			FalsityMod.memories().save(player.getUUID());
+			FalsityMod.personalities().applyEvent(player.getUUID(), name, PersonalityProfile.Event.BONDED);
+			FalsityMod.horror().recordInteraction(player.getUUID(), name);
+		} catch (RuntimeException exception) {
+			FalsityMod.LOGGER.warn("Could not record first meeting with {}; bonding still succeeded.", player.getName().getString(), exception);
+		}
 	}
 
 	/**
@@ -172,11 +201,29 @@ public class FalsityEntity extends PathfinderMob {
 		if (player.isShiftKeyDown()) {
 			setSitting(!isSitting());
 			player.sendSystemMessage(Component.translatable(isSitting() ? "message.falsity.sit" : "message.falsity.follow"));
+			recordOrder(player, isSitting() ? "sit" : "follow");
 			return InteractionResult.SUCCESS;
 		}
 
 		pet(player);
 		return InteractionResult.SUCCESS;
+	}
+
+	/** Records an order in memory. Never throws. */
+	private void recordOrder(Player player, String order) {
+		if (FalsityMod.memories() == null || FalsityMod.personalities() == null) {
+			return;
+		}
+		try {
+			String name = player.getName().getString();
+			PlayerMemory memory = FalsityMod.memories().getOrCreate(player.getUUID(), name);
+			memory.touch(System.currentTimeMillis());
+			memory.recordOrder(order, FalsityMod.config().memory.maxRecentInteractions);
+			FalsityMod.memories().save(player.getUUID());
+			FalsityMod.personalities().applyEvent(player.getUUID(), name, PersonalityProfile.Event.ORDER_GIVEN);
+		} catch (RuntimeException exception) {
+			FalsityMod.LOGGER.warn("Could not record order from {}; orders still worked.", player.getName().getString(), exception);
+		}
 	}
 
 	private void bond(Player player) {
@@ -200,6 +247,36 @@ public class FalsityEntity extends PathfinderMob {
 
 		greet();
 		player.sendSystemMessage(Component.translatable("message.falsity.pet"));
+		recordPet(player);
+	}
+
+	/**
+	 * Records a pet in memory and, if the owner was away for a day or more,
+	 * greets them with a welcome-back line that proves Falsity noticed.
+	 * Petting never triggers a Groq request.
+	 */
+	private void recordPet(Player player) {
+		if (FalsityMod.memories() == null || FalsityMod.personalities() == null || FalsityMod.horror() == null) {
+			return;
+		}
+		try {
+			String name = player.getName().getString();
+			long now = System.currentTimeMillis();
+			PlayerMemory memory = FalsityMod.memories().getOrCreate(player.getUUID(), name);
+			long daysAway = memory.daysSinceSeen(now);
+			memory.touch(now);
+			memory.recordPet(FalsityMod.config().memory.maxRecentInteractions);
+			FalsityMod.memories().save(player.getUUID());
+			FalsityMod.personalities().applyEvent(player.getUUID(), name, PersonalityProfile.Event.PETTED);
+			if (daysAway >= 1L) {
+				FalsityMod.personalities().applyEvent(player.getUUID(), name, PersonalityProfile.Event.OWNER_RETURNED);
+				String line = new OfflineFallback().welcomeBack(daysAway);
+				player.sendSystemMessage(Component.literal("<" + this.getName().getString() + "> " + line));
+			}
+			FalsityMod.horror().recordInteraction(player.getUUID(), name);
+		} catch (RuntimeException exception) {
+			FalsityMod.LOGGER.warn("Could not record pet from {}; petting still worked.", player.getName().getString(), exception);
+		}
 	}
 
 	/** Plays the greeting animation on every client that can see Falsity. */
@@ -243,7 +320,67 @@ public class FalsityEntity extends PathfinderMob {
 			this.catchUpCooldown--;
 		}
 
+		if (this.stareCooldownTicks > 0) {
+			this.stareCooldownTicks--;
+		}
+
 		catchUpWithOwnerIfNeeded();
+		tickStaring();
+	}
+
+	/**
+	 * Horror foundation: at Strange or beyond, Falsity occasionally stops
+	 * and stares at its owner for a few seconds. Harmless by design: no
+	 * movement, no sound, no damage. Gated by a long cooldown so it stays
+	 * rare, and only when the owner is close enough to be watched.
+	 */
+	private void tickStaring() {
+		if (this.stareTicksLeft > 0) {
+			this.stareTicksLeft--;
+			getOwner().ifPresent(owner -> this.getLookControl().setLookAt(owner, 10.0F, this.getMaxHeadXRot()));
+			if (this.stareTicksLeft == 0) {
+				this.stareCooldownTicks = 6000;
+			}
+			return;
+		}
+
+		if (this.stareCooldownTicks > 0 || this.isSitting()) {
+			return;
+		}
+
+		Optional<Player> ownerOptional = getOwner();
+		if (ownerOptional.isEmpty()) {
+			return;
+		}
+		Player owner = ownerOptional.get();
+		if (owner.level() != this.level() || !owner.isAlive()) {
+			return;
+		}
+		if (this.distanceToSqr(owner) > 36.0) {
+			return;
+		}
+		if (FalsityMod.horror() == null) {
+			return;
+		}
+
+		// Rare: roughly once every few minutes of close proximity.
+		if (this.random.nextInt(1200) != 0) {
+			return;
+		}
+
+		boolean allowed;
+		try {
+			allowed = FalsityMod.horror().shouldStare(owner.getUUID(), owner.getName().getString());
+		} catch (RuntimeException exception) {
+			return;
+		}
+		if (!allowed) {
+			return;
+		}
+
+		this.stareTicksLeft = 60 + this.random.nextInt(60);
+		this.getNavigation().stop();
+		FalsityMod.debug("Falsity is staring at its owner.");
 	}
 
 	/**

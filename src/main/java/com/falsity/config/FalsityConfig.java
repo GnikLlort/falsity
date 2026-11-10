@@ -18,8 +18,11 @@ import java.nio.file.StandardCopyOption;
  * features that do not exist yet are deliberately absent rather than present
  * and ignored: the file should never promise behaviour the mod does not have.
  *
- * <p>Secrets do not belong in this file. The Groq API key (Milestone 3) will be
- * read from a separate, git-ignored secret file and will never be logged.
+ * <p>Secrets do not belong in this file. The Groq API key is read from the
+ * {@code GROQ_API_KEY} environment variable first, then from a git-ignored
+ * {@code secrets.json} in the game directory, and only then from the
+ * {@code groq.apiKey} field here (which ships empty). The key is never
+ * logged, never written back to disk by the mod, and never sent to a client.
  *
  * <p>The class is a plain data holder so it can be exercised by unit tests
  * without starting a game: {@link #fromJson(String)} and {@link #toJson()} are
@@ -32,6 +35,11 @@ public final class FalsityConfig {
 	public boolean debugLogging;
 
 	public final Companion companion = new Companion();
+	public final Groq groq = new Groq();
+	public final Conversation conversation = new Conversation();
+	public final Memory memory = new Memory();
+	public final Personality personality = new Personality();
+	public final Horror horror = new Horror();
 
 	public static final class Companion {
 		/** Whether Falsity follows the player it has bonded with. */
@@ -42,6 +50,105 @@ public final class FalsityConfig {
 		public double teleportDistance = 24.0;
 		/** Multiplier applied to Falsity's walking speed while it follows. */
 		public double followSpeed = 1.1;
+	}
+
+	/**
+	 * Groq conversation settings.
+	 *
+	 * <p>The model default is Groq's current fast hosted model at the time of
+	 * writing. Groq retires models without much notice, so the value is
+	 * configurable: if replies stop arriving, check the Groq console for the
+	 * current model list and update this field. The endpoint is the
+	 * OpenAI-compatible chat-completions URL.
+	 */
+	public static final class Groq {
+		/** Master switch. When off, Falsity always uses its offline lines. */
+		public boolean enabled = true;
+		/**
+		 * API key fallback. Leave empty and prefer the {@code GROQ_API_KEY}
+		 * environment variable or {@code secrets.json} instead. Never commit a
+		 * real key to this file.
+		 */
+		public String apiKey = "";
+		/** Groq model id, e.g. {@code openai/gpt-oss-20b}. */
+		public String model = "openai/gpt-oss-20b";
+		/** Chat-completions endpoint. */
+		public String endpoint = "https://api.groq.com/openai/v1/chat/completions";
+		/** Seconds to wait for a Groq reply before falling back offline. */
+		public int timeoutSeconds = 15;
+		/** Maximum tokens in a single reply. */
+		public int maxTokens = 150;
+		/** Sampling temperature, 0.0 (deterministic) to 2.0 (wild). */
+		public double temperature = 0.7;
+	}
+
+	/** Conversation pacing: how often a player may talk to Falsity. */
+	public static final class Conversation {
+		/** Master switch for talking. Petting and orders are unaffected. */
+		public boolean enabled = true;
+		/** Seconds between conversations for the same player. */
+		public int cooldownSeconds = 10;
+		/** Hard cap on Groq requests per minute across the whole server. */
+		public int maxRequestsPerMinute = 10;
+		/** Longest player message accepted, in characters. */
+		public int maxMessageLength = 256;
+	}
+
+	/** Persistent memory limits. Small on purpose: memory must stay bounded. */
+	public static final class Memory {
+		/** Maximum remembered facts kept per player. Oldest trivia is dropped. */
+		public int maxStoredFacts = 50;
+		/** Maximum recent interactions kept per player. */
+		public int maxRecentInteractions = 20;
+		/** Maximum characters in the generated memory summary. */
+		public int maxSummaryChars = 1000;
+		/** Days after which a fact may be forgotten. 0 means never. */
+		public int retentionDays = 365;
+	}
+
+	/**
+	 * Starting personality values, each 0 (absent) to 100 (dominant).
+	 *
+	 * <p>These are the values a brand-new Falsity starts with. Once a player
+	 * has met Falsity, the live values evolve with interactions and are
+	 * persisted per player; editing these only affects new relationships.
+	 */
+	public static final class Personality {
+		public int curiosity = 70;
+		public int affection = 60;
+		public int attachment = 40;
+		public int playfulness = 50;
+		public int jealousy = 10;
+		public int suspicion = 5;
+		public int loneliness = 20;
+		public int fear = 5;
+		public int hostility = 0;
+		/** Multiplier on how fast personality values drift. 0 freezes them. */
+		public double evolutionRate = 1.0;
+	}
+
+	/**
+	 * Horror progression settings.
+	 *
+	 * <p>Progression is deliberately slow and capped: this milestone only
+	 * allows the first step beyond innocence (stage 1, "Strange"). Later
+	 * milestones raise the cap. Falsity never becomes hostile in this
+	 * milestone regardless of these settings.
+	 */
+	public static final class Horror {
+		/** Master switch. When off, the stage never advances. */
+		public boolean enabled = true;
+		/** Multiplier on progression speed. 0 disables escalation entirely. */
+		public double progressionSpeed = 1.0;
+		/**
+		 * Highest stage Falsity may reach: 0 Innocence, 1 Strange,
+		 * 2 Suspicion, 3 Fear, 4 Nightmare. This milestone clamps to 1.
+		 */
+		public int maxStage = 1;
+		/** Whether Falsity may stop and stare at its owner (harmless). */
+		public boolean allowStaring = true;
+		/** Whether Falsity may use subtly unsettling offline lines. */
+		public boolean allowUnsettlingLines = true;
 	}
 
 	/** Reads the configuration, falling back to defaults if the file is unusable. */
@@ -112,6 +219,43 @@ public final class FalsityConfig {
 		companion.followStartDistance = clamp(companion.followStartDistance, 2.0, 24.0);
 		companion.teleportDistance = clamp(companion.teleportDistance, companion.followStartDistance + 2.0, 128.0);
 		companion.followSpeed = clamp(companion.followSpeed, 0.1, 2.0);
+
+		if (groq.apiKey == null) {
+			groq.apiKey = "";
+		}
+		if (groq.model == null || groq.model.isBlank()) {
+			groq.model = "openai/gpt-oss-20b";
+		}
+		if (groq.endpoint == null || groq.endpoint.isBlank()) {
+			groq.endpoint = "https://api.groq.com/openai/v1/chat/completions";
+		}
+		groq.timeoutSeconds = clampInt(groq.timeoutSeconds, 2, 60);
+		groq.maxTokens = clampInt(groq.maxTokens, 16, 1024);
+		groq.temperature = clamp(groq.temperature, 0.0, 2.0);
+
+		conversation.cooldownSeconds = clampInt(conversation.cooldownSeconds, 0, 300);
+		conversation.maxRequestsPerMinute = clampInt(conversation.maxRequestsPerMinute, 1, 30);
+		conversation.maxMessageLength = clampInt(conversation.maxMessageLength, 16, 1024);
+
+		memory.maxStoredFacts = clampInt(memory.maxStoredFacts, 0, 500);
+		memory.maxRecentInteractions = clampInt(memory.maxRecentInteractions, 0, 200);
+		memory.maxSummaryChars = clampInt(memory.maxSummaryChars, 0, 8000);
+		memory.retentionDays = clampInt(memory.retentionDays, 0, 3650);
+
+		personality.curiosity = clampInt(personality.curiosity, 0, 100);
+		personality.affection = clampInt(personality.affection, 0, 100);
+		personality.attachment = clampInt(personality.attachment, 0, 100);
+		personality.playfulness = clampInt(personality.playfulness, 0, 100);
+		personality.jealousy = clampInt(personality.jealousy, 0, 100);
+		personality.suspicion = clampInt(personality.suspicion, 0, 100);
+		personality.loneliness = clampInt(personality.loneliness, 0, 100);
+		personality.fear = clampInt(personality.fear, 0, 100);
+		personality.hostility = clampInt(personality.hostility, 0, 100);
+		personality.evolutionRate = clamp(personality.evolutionRate, 0.0, 5.0);
+
+		horror.progressionSpeed = clamp(horror.progressionSpeed, 0.0, 10.0);
+		// This milestone never allows more than the first step beyond innocence.
+		horror.maxStage = clampInt(horror.maxStage, 0, 1);
 	}
 
 	private static double clamp(double value, double minimum, double maximum) {
@@ -119,6 +263,10 @@ public final class FalsityConfig {
 			return minimum;
 		}
 
+		return Math.max(minimum, Math.min(maximum, value));
+	}
+
+	private static int clampInt(int value, int minimum, int maximum) {
 		return Math.max(minimum, Math.min(maximum, value));
 	}
 }

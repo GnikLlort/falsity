@@ -39,6 +39,10 @@ secrets.json
 .env
 .env.*
 
+# Runtime data written by the mod into the game directory (per-player
+# memory files). Never commit these: they contain player conversations.
+falsity-memory/
+
 # Local test artefacts produced by tools/
 tools/.cache/
 tools/out/

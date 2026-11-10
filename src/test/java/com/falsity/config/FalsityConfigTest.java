@@ -81,4 +81,80 @@ class FalsityConfigTest {
 		assertEquals(128.0, config.companion.teleportDistance);
 		assertEquals(0.1, config.companion.followSpeed);
 	}
+
+	@Test
+	void groqDefaultsAreOfflineSafe() {
+		FalsityConfig config = new FalsityConfig();
+
+		assertTrue(config.groq.enabled);
+		assertEquals("", config.groq.apiKey, "No real API key may ship in defaults");
+		assertEquals("openai/gpt-oss-20b", config.groq.model);
+		assertTrue(config.groq.timeoutSeconds > 0);
+		assertTrue(config.groq.maxTokens > 0);
+		assertTrue(config.groq.temperature >= 0.0 && config.groq.temperature <= 2.0);
+	}
+
+	@Test
+	void groqRoundTripPreservesValues() {
+		FalsityConfig original = new FalsityConfig();
+		original.groq.enabled = false;
+		original.groq.model = "llama-3.3-70b-versatile";
+		original.groq.timeoutSeconds = 30;
+		original.groq.maxTokens = 200;
+		original.groq.temperature = 0.3;
+
+		FalsityConfig restored = FalsityConfig.fromJson(original.toJson());
+
+		assertFalse(restored.groq.enabled);
+		assertEquals("llama-3.3-70b-versatile", restored.groq.model);
+		assertEquals(30, restored.groq.timeoutSeconds);
+		assertEquals(200, restored.groq.maxTokens);
+		assertEquals(0.3, restored.groq.temperature);
+	}
+
+	@Test
+	void groqSanitiseClampsNonsense() {
+		FalsityConfig config = new FalsityConfig();
+		config.groq.timeoutSeconds = 9999;
+		config.groq.maxTokens = -5;
+		config.groq.temperature = 99.0;
+		config.groq.model = "  ";
+
+		config.sanitise();
+
+		assertEquals(60, config.groq.timeoutSeconds);
+		assertEquals(16, config.groq.maxTokens);
+		assertEquals(2.0, config.groq.temperature);
+		assertEquals("openai/gpt-oss-20b", config.groq.model);
+	}
+
+	@Test
+	void conversationAndMemoryDefaultsAreBounded() {
+		FalsityConfig config = new FalsityConfig();
+
+		assertTrue(config.conversation.enabled);
+		assertTrue(config.conversation.cooldownSeconds >= 0);
+		assertTrue(config.conversation.maxRequestsPerMinute >= 1);
+		assertTrue(config.memory.maxStoredFacts > 0);
+		assertTrue(config.memory.maxRecentInteractions > 0);
+	}
+
+	@Test
+	void horrorIsCappedAtStrangeInThisMilestone() {
+		FalsityConfig config = new FalsityConfig();
+		config.horror.maxStage = 4;
+
+		config.sanitise();
+
+		assertEquals(1, config.horror.maxStage, "This milestone must never allow more than Strange");
+	}
+
+	@Test
+	void personalityDefaultsAreInRange() {
+		FalsityConfig config = new FalsityConfig();
+
+		assertTrue(config.personality.curiosity >= 0 && config.personality.curiosity <= 100);
+		assertTrue(config.personality.affection >= 0 && config.personality.affection <= 100);
+		assertTrue(config.personality.hostility >= 0 && config.personality.hostility <= 100);
+	}
 }
