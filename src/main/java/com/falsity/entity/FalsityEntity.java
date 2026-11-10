@@ -196,7 +196,13 @@ public class FalsityEntity extends PathfinderMob {
 	/** Walks to a position, standing up first if it was sitting. */
 	public void walkTo(Vec3 position) {
 		this.setSitting(false);
-		this.getNavigation().setTarget(position.x, position.y, position.z);
+		// Same pace the companion uses when following its owner.
+		this.getNavigation().moveTo(
+			position.x,
+			position.y,
+			position.z,
+			CompanionBehaviour.followSpeed(FalsityMod.config().companion)
+		);
 	}
 
 	/** Stops walking and stays exactly where it is. */
