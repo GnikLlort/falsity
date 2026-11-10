@@ -35,7 +35,7 @@ public final class StructureLibrary {
 		BlockPos origin
 	) {
 		String kind = structure == null ? "" : structure.trim().toLowerCase(Locale.ROOT);
-		BlockState block = materialBlock(material);
+		BlockState block = materialBlock(material).defaultBlockState();
 
 		return switch (kind) {
 			case "house", "hut", "cabin", "cottage", "home" -> house(width, length, height, origin, block);
@@ -280,7 +280,7 @@ public final class StructureLibrary {
 			return Blocks.GLASS;
 		}
 		if (m.contains("wool")) {
-			return Blocks.WHITE_WOOL;
+			return Blocks.WOOL.white();
 		}
 		if (m.contains("log") || m.contains("logs")) {
 			return logBlock(m);

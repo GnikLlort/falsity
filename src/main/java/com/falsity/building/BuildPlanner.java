@@ -53,9 +53,9 @@ public final class BuildPlanner {
 		forward = forward.normalize();
 
 		double offset = size / 2.0 + 2.0;
-		Vec3 target = player.position().add(forward.multiplyScalar(offset));
+		Vec3 target = player.position().add(forward.scale(offset));
 		// Stand the structure on the block under the player's feet.
-		return new BlockPos(target.x, Math.floor(player.getY()) - 1.0, target.z);
+		return BlockPos.containing(target).below();
 	}
 
 	private static AABB regionOf(List<BlockPlacement> placements) {

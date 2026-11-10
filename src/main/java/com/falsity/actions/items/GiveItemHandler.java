@@ -14,6 +14,8 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.permissions.Permissions;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -42,7 +44,7 @@ public final class GiveItemHandler implements ActionHandler {
 	@Override
 	public synchronized ActionResult handle(ActionContext context, ActionRequest request) {
 		FalsityConfig config = context.config();
-		Player player = context.player();
+		ServerPlayer player = context.player();
 
 		if (!config.items.enabled) {
 			return ActionResult.failure("I'm not allowed to conjure items right now.");
@@ -134,11 +136,12 @@ public final class GiveItemHandler implements ActionHandler {
 		return true;
 	}
 
-	private static boolean mayUse(Player player, FalsityEntity falsity, FalsityConfig config) {
+	private static boolean mayUse(ServerPlayer player, FalsityEntity falsity, FalsityConfig config) {
 		return switch (config.items.permissionMode) {
 			case NONE -> false;
-			case CREATIVE -> player.isCreativeMode();
-			case OPERATOR -> player.hasPermissions(2);
+			case CREATIVE -> player.isCreative();
+			// Vanilla's gamemaster level, which is what operator level 2 means.
+			case OPERATOR -> player.permissions().hasPermission(Permissions.COMMANDS_GAMEMASTER);
 			case OWNER -> falsity != null && falsity.isBondedTo(player.getUUID());
 			case UNRESTRICTED -> true;
 		};

@@ -28,7 +28,7 @@ public final class HostileScanner {
 		List<LivingEntity> result = new ArrayList<>();
 		List<Entity> entities = level.getEntities((Entity) null, box, entity ->
 			entity instanceof LivingEntity living && living.isAlive()
-				&& living.getType().getCategory() == MobCategory.HOSTILE
+				&& living.getType().getCategory() == MobCategory.MONSTER
 				&& living != center);
 		for (Entity entity : entities) {
 			if (entity instanceof LivingEntity living) {
