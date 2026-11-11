@@ -34,6 +34,8 @@ import com.falsity.horror.HorrorManager;
 import com.falsity.memory.MemoryManager;
 import com.falsity.memory.MemoryStorage;
 import com.falsity.personality.PersonalityManager;
+import com.falsity.personality.PersonalityPrompt;
+import com.falsity.personality.PersonalityPromptStore;
 import com.falsity.world.WorldQueryHandler;
 import com.falsity.world.WorldService;
 import java.nio.file.Path;
@@ -48,9 +50,10 @@ import org.slf4j.LoggerFactory;
 /**
  * Entry point of the Falsity mod.
  *
- * <p>Initialisation order matters: the configuration is read first, then the
- * registries are populated, then the intelligence managers (memory,
- * personality, horror, conversation) are wired, then commands are hooked in.
+ * <p>Initialisation order matters: the configuration and the personality file
+ * are read first, then the registries are populated, then the intelligence
+ * managers (memory, personality, horror, conversation) are wired, then commands
+ * are hooked in.
  * Nothing here talks to a network or to a client, so the integrated and
  * dedicated servers follow the same path.
  */
@@ -61,6 +64,7 @@ public class FalsityMod implements ModInitializer {
 	private static FalsityConfig config = new FalsityConfig();
 	private static MemoryManager memories;
 	private static PersonalityManager personalities;
+	private static PersonalityPromptStore personalityPrompts = PersonalityPromptStore.builtIn();
 	private static HorrorManager horror;
 	private static ConversationManager conversations;
 	private static ActionExecutor actions;
@@ -73,6 +77,11 @@ public class FalsityMod implements ModInitializer {
 	public void onInitialize() {
 		gameDir = FabricLoader.getInstance().getGameDir();
 		config = FalsityConfig.load(FabricLoader.getInstance().getConfigDir().resolve("falsity.json"));
+		// Read at start-up, so config/falsity/personality.txt exists before anyone
+		// goes looking for it and the log says which personality is in use.
+		personalityPrompts = new PersonalityPromptStore(
+			PersonalityPromptStore.fileIn(FabricLoader.getInstance().getConfigDir()));
+		personalityPrompts.load();
 
 		FalsityRegistries.initialize();
 
@@ -123,6 +132,7 @@ public class FalsityMod implements ModInitializer {
 		conversations.setConfigSource(FalsityMod::config);
 		conversations.setItemCatalog(ItemAssistance.CATALOG);
 		conversations.setWorldFacts((player, falsity) -> WorldService.facts(player, falsity, config));
+		conversations.setPersonalityPrompts(personalityPrompts);
 
 		actions = executor;
 		confirmations = confirmationManager;
@@ -175,6 +185,21 @@ public class FalsityMod implements ModInitializer {
 		config.copyFrom(loaded.get());
 		LOGGER.info("Falsity settings reloaded. {}", describeGroqSetup());
 		return "";
+	}
+
+	/**
+	 * Re-reads {@code config/falsity/personality.txt} now and returns what
+	 * Falsity will use from here on. Never fails: an unusable file gives the
+	 * built-in default and a note saying why. Players' memories, personality
+	 * values and horror stages are not touched.
+	 */
+	public static PersonalityPrompt reloadPersonality() {
+		return personalityPrompts.load();
+	}
+
+	/** Falsity's personality text: where it is read from and what is in use. */
+	public static PersonalityPromptStore personalityPrompts() {
+		return personalityPrompts;
 	}
 
 	public static Identifier id(String path) {

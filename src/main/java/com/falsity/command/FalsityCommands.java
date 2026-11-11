@@ -8,6 +8,8 @@ import com.falsity.entity.FalsityEntity;
 import com.falsity.horror.HorrorStage;
 import com.falsity.memory.MemorySummarizer;
 import com.falsity.memory.PlayerMemory;
+import com.falsity.personality.PersonalityPrompt;
+import com.falsity.personality.StageDirections;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
@@ -88,10 +90,17 @@ public final class FalsityCommands {
 					.executes(FalsityCommands::clearMemory)));
 	}
 
-	/** {@code /falsity personality} — open; shows Falsity's traits towards the caller. */
+	/**
+	 * {@code /falsity personality [reload]} — showing Falsity's traits towards
+	 * the caller is open; re-reading {@code config/falsity/personality.txt} is
+	 * moderator only.
+	 */
 	private static LiteralArgumentBuilder<CommandSourceStack> personalityCommand() {
 		return Commands.literal("personality")
-			.executes(FalsityCommands::showPersonality);
+			.executes(FalsityCommands::showPersonality)
+			.then(Commands.literal("reload")
+				.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_MODERATOR))
+				.executes(FalsityCommands::reloadPersonality));
 	}
 
 	/** {@code /falsity horror [set <player> <stage>]} — inspect is open, setting is moderator only. */
@@ -114,7 +123,7 @@ public final class FalsityCommands {
 			.then(Commands.literal("test").executes(FalsityCommands::aiTest));
 	}
 
-	/** {@code /falsity reload}: re-reads config/falsity.json without a restart. */
+	/** {@code /falsity reload}: re-reads config/falsity.json and the personality file without a restart. */
 	private static LiteralArgumentBuilder<CommandSourceStack> reloadCommand() {
 		return Commands.literal("reload")
 			.requires(source -> source.permissions().hasPermission(Permissions.COMMANDS_MODERATOR))
@@ -169,12 +178,28 @@ public final class FalsityCommands {
 
 	private static int reload(CommandContext<CommandSourceStack> context) {
 		CommandSourceStack source = context.getSource();
+		// The two files are independent: a broken settings file does not stop the personality being re-read.
+		PersonalityPrompt personality = FalsityMod.reloadPersonality();
+		String personalityLine = "Personality: " + personality.describe() + ".";
 		String problem = FalsityMod.reloadConfig();
 		if (!problem.isEmpty()) {
-			source.sendFailure(Component.literal(problem));
+			source.sendFailure(Component.literal(problem + " " + personalityLine));
 			return 0;
 		}
-		source.sendSuccess(() -> Component.literal("Falsity's settings were reloaded from config/falsity.json."), true);
+		source.sendSuccess(
+			() -> Component.literal("Falsity's settings were reloaded from config/falsity.json. " + personalityLine), true);
+		return 1;
+	}
+
+	private static int reloadPersonality(CommandContext<CommandSourceStack> context) {
+		CommandSourceStack source = context.getSource();
+		PersonalityPrompt personality = FalsityMod.reloadPersonality();
+		if (personality.fellBack()) {
+			source.sendFailure(Component.literal(
+				"Falsity's personality file cannot be used: " + personality.detail() + ". The built-in default is in use until it is fixed."));
+			return 0;
+		}
+		source.sendSuccess(() -> Component.literal("Falsity's personality was reloaded: " + personality.describe() + "."), true);
 		return 1;
 	}
 
@@ -329,6 +354,15 @@ public final class FalsityCommands {
 				+ ", loneliness " + Math.round(profile.loneliness)
 				+ ", fear " + Math.round(profile.fear)
 		));
+		// Which personality text is in use (never the text itself), and the voice the horror stage gives it.
+		player.sendSystemMessage(Component.literal("Personality text: " + FalsityMod.personalityPrompts().current().describe() + "."));
+		if (FalsityMod.horror() != null) {
+			HorrorStage stage = FalsityMod.horror().stageFor(player.getUUID(), name);
+			boolean unsettling = FalsityMod.horror().shouldUnsettle(player.getUUID(), name);
+			player.sendSystemMessage(Component.literal(
+				"Voice: " + StageDirections.voiceName(unsettling ? stage : HorrorStage.INNOCENCE)
+					+ " (horror stage " + stage.displayName() + ")."));
+		}
 		return 1;
 	}
 

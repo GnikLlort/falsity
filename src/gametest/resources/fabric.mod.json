@@ -9,7 +9,8 @@
 			"com.falsity.gametest.FalsityGameTest",
 			"com.falsity.gametest.FalsityIntelligenceGameTest",
 			"com.falsity.gametest.FalsityAssistanceGameTest",
-			"com.falsity.gametest.FalsityGroqPipelineGameTest"
+			"com.falsity.gametest.FalsityGroqPipelineGameTest",
+			"com.falsity.gametest.FalsityPersonalityGameTest"
 		]
 	},
 	"depends": {

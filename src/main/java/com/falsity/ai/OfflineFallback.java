@@ -29,9 +29,14 @@ import java.util.regex.Pattern;
  *
  * <p>Lines are personality-aware (curious Falsity asks questions, attached
  * Falsity leans in) and horror-aware (only at Strange or beyond may a line hint
- * that Falsity remembers too much). A line that was used recently is avoided, so
- * a conversation does not loop. Every method returns a non-empty line and never
- * throws.
+ * that Falsity remembers too much, and it does so more often the further the
+ * stage has gone). A line that was used recently is avoided, so a conversation
+ * does not loop. Every method returns a non-empty line and never throws.
+ *
+ * <p>These lines are written in the voice of the default personality. The text
+ * in {@code config/falsity/personality.txt} shapes what Groq says; it cannot
+ * rewrite lines that were written in advance, so with a heavily customised
+ * personality the offline voice is still the original Falsity.
  */
 public final class OfflineFallback {
 	/** How many of its own recent lines the fallback avoids repeating. */
@@ -122,7 +127,7 @@ public final class OfflineFallback {
 
 		if (smallTalk
 			&& stage != null && stage.ordinal() >= HorrorStage.STRANGE.ordinal()
-			&& memory != null && !memory.facts.isEmpty() && this.random.nextInt(4) == 0) {
+			&& memory != null && !memory.facts.isEmpty() && recallsNow(stage)) {
 			String fact = memory.facts.get(this.random.nextInt(memory.facts.size()));
 			String line = "I still remember... " + lowerFirst(fact) + ".";
 			if (!avoid.contains(line)) {
@@ -192,6 +197,36 @@ public final class OfflineFallback {
 				return pickFresh(lines, avoid);
 			}
 		}
+	}
+
+	/**
+	 * Whether this small-talk reply is one where Falsity brings up something
+	 * the player once told it. Never at the first stage; one reply in four at
+	 * Strange, as it has always been; more often at each stage after that. The
+	 * thing recalled is always a real stored fact, so the line is different
+	 * for every player and nothing is made up.
+	 */
+	private boolean recallsNow(HorrorStage stage) {
+		return switch (stage) {
+			case INNOCENCE -> false;
+			case STRANGE -> this.random.nextInt(4) == 0;
+			case SUSPICION -> this.random.nextInt(3) == 0;
+			case FEAR -> this.random.nextInt(2) == 0;
+			case NIGHTMARE -> this.random.nextInt(3) != 0;
+		};
+	}
+
+	/**
+	 * How a message treats Falsity, in the letters {@link PlayerMemory} keeps:
+	 * kind words (affection, a compliment, thanks, an apology), harsh words
+	 * (an insult), or neither. Pure and deterministic.
+	 */
+	public static char treatmentOf(String playerMessage) {
+		return switch (classify(playerMessage)) {
+			case AFFECTION, COMPLIMENT, THANKS, APOLOGY -> PlayerMemory.KIND;
+			case INSULT -> PlayerMemory.HARSH;
+			default -> PlayerMemory.NEUTRAL;
+		};
 	}
 
 	/** Decides what kind of message this is. Pure and deterministic. */

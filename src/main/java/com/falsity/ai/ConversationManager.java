@@ -12,14 +12,17 @@ import com.falsity.actions.items.ItemRequestParser;
 import com.falsity.actions.items.ItemResolver;
 import com.falsity.config.FalsityConfig;
 import com.falsity.entity.FalsityEntity;
+import com.falsity.horror.HorrorEvent;
 import com.falsity.horror.HorrorManager;
 import com.falsity.horror.HorrorStage;
 import com.falsity.memory.MemoryManager;
 import com.falsity.memory.MemorySummarizer;
 import com.falsity.memory.PlayerMemory;
-import com.falsity.personality.EmotionalState;
 import com.falsity.personality.PersonalityManager;
 import com.falsity.personality.PersonalityProfile;
+import com.falsity.personality.PersonalityPrompt;
+import com.falsity.personality.PersonalityPromptStore;
+import com.falsity.personality.StageDirections;
 import com.falsity.world.WorldQueryRecognizer;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -49,10 +52,13 @@ import org.slf4j.LoggerFactory;
  *       at once. No network call, no cooldown, same result with or without
  *       Groq.</li>
  *   <li><b>Conversation</b> goes to Groq when it is enabled and a key is set.
- *       The request carries the last few exchanges and whatever the server has
- *       verified about the world. A message that arrives during the cooldown,
- *       or while the previous reply is still on its way, waits its turn
- *       instead of being discarded.</li>
+ *       The request is built in layers by {@link PromptAssembler}: the mod's
+ *       rules, the personality text from {@code config/falsity/personality.txt},
+ *       how that personality comes out at the player's horror stage, where the
+ *       two of them stand, what Falsity remembers, what the server has verified
+ *       about the world, the last few exchanges and then the message itself. A
+ *       message that arrives during the cooldown, or while the previous reply
+ *       is still on its way, waits its turn instead of being discarded.</li>
  *   <li><b>Any Groq failure</b> (no key, rejected key, rate limit, timeout,
  *       empty reply) is logged with its reason and answered by
  *       {@link OfflineFallback}, which replies to what was actually said.</li>
@@ -100,6 +106,7 @@ public final class ConversationManager {
 	private ActionExecutor executor;
 	private ItemCatalog itemCatalog;
 	private WorldFacts worldFacts;
+	private PersonalityPromptStore personalityPrompts = PersonalityPromptStore.builtIn();
 
 	/**
 	 * A message waiting for the player's turn.
@@ -120,14 +127,17 @@ public final class ConversationManager {
 		private final boolean isOwner;
 		private final PlayerMemory memory;
 		private final PersonalityProfile personality;
-		private final HorrorStage stage;
+		/** The stage whose voice is used, with Groq or without: the horror system's stage, unless its switch for unsettling lines is off. */
+		private final HorrorStage voice;
+		/** Whole days the player had been away when they spoke. */
+		private final long daysAway;
 		private final AtomicBoolean answered = new AtomicBoolean();
 		private String verifiedFacts = "";
 		private String unknownItem = "";
 		private int attempt;
 
 		private Turn(long id, Player player, FalsityEntity falsity, String message, boolean isOwner,
-			PlayerMemory memory, PersonalityProfile personality, HorrorStage stage) {
+			PlayerMemory memory, PersonalityProfile personality, HorrorStage voice, long daysAway) {
 			this.id = id;
 			this.player = player;
 			this.falsity = falsity;
@@ -136,7 +146,8 @@ public final class ConversationManager {
 			this.isOwner = isOwner;
 			this.memory = memory;
 			this.personality = personality;
-			this.stage = stage;
+			this.voice = voice;
+			this.daysAway = daysAway;
 		}
 	}
 
@@ -198,6 +209,19 @@ public final class ConversationManager {
 	/** Supplies verified world facts for prompts. */
 	public void setWorldFacts(WorldFacts worldFacts) {
 		this.worldFacts = worldFacts;
+	}
+
+	/**
+	 * Supplies the personality text for prompts. Without one, the built-in
+	 * default personality is used and no file is read.
+	 */
+	public void setPersonalityPrompts(PersonalityPromptStore personalityPrompts) {
+		this.personalityPrompts = personalityPrompts == null ? PersonalityPromptStore.builtIn() : personalityPrompts;
+	}
+
+	/** Where the personality text comes from, for status reporting and reloading. */
+	public PersonalityPromptStore personalityPrompts() {
+		return this.personalityPrompts;
 	}
 
 	/** The Groq client, for status reporting. */
@@ -388,14 +412,25 @@ public final class ConversationManager {
 		String playerName = player.getName().getString();
 
 		PlayerMemory memory = this.memories.getOrCreate(playerUuid, playerName);
+		boolean isOwner = falsity.isBondedTo(playerUuid);
+		// Read before the memory is touched: afterwards the player was "last seen" just now.
+		long daysAway = memory.daysSinceSeen(now);
 		memory.touch(now);
+		if (daysAway >= 1L) {
+			memory.recordReturn(now, daysAway);
+			memory.addRecent(HorrorEvent.returned(now, daysAway).description(), config.memory.maxRecentInteractions);
+		}
 		MemorySummarizer.refresh(memory, config.memory.maxSummaryChars);
 		this.memories.save(playerUuid);
+		if (daysAway >= 1L && isOwner) {
+			// The same event a pet after an absence has always raised.
+			this.personalities.applyEvent(playerUuid, playerName, PersonalityProfile.Event.OWNER_RETURNED);
+		}
 
 		PersonalityProfile personality = this.personalities.profileFor(playerUuid, playerName);
-		HorrorStage stage = this.horror.stageFor(playerUuid, playerName);
+		HorrorStage voice = PromptAssembler.voiceStage(this.horror, playerUuid, playerName);
 		return new Turn(this.turnCounter.incrementAndGet(), player, falsity, message,
-			falsity.isBondedTo(playerUuid), memory, personality, stage);
+			isOwner, memory, personality, voice, daysAway);
 	}
 
 	private void sendToGroq(Turn turn, String apiKey, FalsityConfig config, long now) {
@@ -420,12 +455,28 @@ public final class ConversationManager {
 			hint = "You have no verified location for what the player is asking about. Say you do not know where it is.";
 		}
 
-		EmotionalState mood = EmotionalState.from(turn.personality);
-		String systemPrompt = PromptBuilder.buildSystemPrompt(
-			turn.memory, turn.personality, mood, turn.stage, turn.isOwner, turn.message,
-			new PromptBuilder.Context(turn.verifiedFacts, hint));
-		List<GroqClient.ChatMessage> messages = PromptBuilder.buildMessages(
-			systemPrompt, this.history.recent(playerUuid, config.groq.historyTurns, now), turn.message);
+		List<GroqClient.ChatMessage> messages;
+		try {
+			// Saving config/falsity/personality.txt is enough: a changed file is read again here.
+			PersonalityPrompt personality = this.personalityPrompts.refreshIfChanged();
+			PromptAssembler.Assembled assembled = PromptAssembler.assemble(
+				personality,
+				new PromptAssembler.Turn(
+					turn.falsity.getName().getString(), turn.memory, turn.personality, turn.voice, turn.isOwner,
+					turn.daysAway, turn.message, turn.verifiedFacts, hint),
+				this.history.recent(playerUuid, config.groq.historyTurns, now),
+				now,
+				apiKey);
+			messages = assembled.messages();
+			FalsityMod.debug("Turn {} for {}: prompt is {}; {}; {} voice.", turn.id, turn.player.getName().getString(),
+				assembled.layers().sizes(), personality.describe(), StageDirections.voiceName(turn.voice));
+		} catch (RuntimeException exception) {
+			// Never a reason to leave the player without an answer.
+			LOGGER.warn("Falsity could not build a prompt for {}; an offline line was used. ({})",
+				turn.player.getName().getString(), exception.toString());
+			deliverOffline(turn, config);
+			return;
+		}
 
 		this.pacer.markBusy(playerUuid, now);
 		this.groq.exchange(new GroqClient.Request(
@@ -547,7 +598,7 @@ public final class ConversationManager {
 			// "Give me a flibber": say so, rather than answering with small talk.
 			reply = this.fallback.unknownItem(turn.unknownItem, recent);
 		} else {
-			reply = this.fallback.respond(turn.memory, turn.personality, turn.stage, turn.message, turn.isOwner, recent);
+			reply = this.fallback.respond(turn.memory, turn.personality, turn.voice, turn.message, turn.isOwner, recent);
 		}
 		finish(turn, reply, config);
 	}
@@ -565,6 +616,8 @@ public final class ConversationManager {
 
 		this.history.record(playerUuid, turn.message, reply, this.clock.getAsLong());
 		turn.memory.recordConversation(turn.message, reply, config.memory.maxRecentInteractions);
+		// Kind words, harsh words or neither: how the player speaks to Falsity is part of the relationship.
+		turn.memory.recordTreatment(OfflineFallback.treatmentOf(turn.message));
 		extractFact(turn.memory, turn.message);
 		this.memories.save(playerUuid);
 		this.personalities.applyEvent(playerUuid, playerName, PersonalityProfile.Event.CONVERSATION);

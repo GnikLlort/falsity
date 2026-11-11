@@ -17,9 +17,13 @@ import org.junit.jupiter.api.Test;
  * The prompt is the only thing the model knows about how to answer. Whatever
  * else has to give way when it gets long, the rules, the verified facts and
  * the player's own words must arrive whole.
+ *
+ * <p>The rules are the first of the prompt's layers (see
+ * {@link PromptLayersTest} for the order of the rest).
  */
 class PromptBuilderRulesTest {
 	private static final String LAST_RULE = "Never invent an item or promise something the tag cannot do.";
+	private static final String CLOSING = "Now answer the player's next message as Falsity.";
 
 	private static PlayerMemory memory() {
 		return new PlayerMemory("uuid-1", "Steve", 0L);
@@ -34,6 +38,20 @@ class PromptBuilderRulesTest {
 		return memory;
 	}
 
+	/**
+	 * The rules are the first layer. They open the prompt and arrive whole,
+	 * before the personality and everything after it, however long the rest is.
+	 */
+	private static void assertRulesComeFirstAndWhole(String prompt) {
+		assertTrue(prompt.startsWith("You are Falsity"), prompt);
+		int rules = prompt.indexOf("\nRules:\n");
+		int lastRule = prompt.indexOf(LAST_RULE);
+		int personality = prompt.indexOf("\n" + PromptBuilder.PERSONALITY_HEADER + "\n");
+		assertTrue(rules > 0 && lastRule > rules, "every rule is there, down to the last one: " + prompt);
+		assertTrue(personality > lastRule, "the rules come before the personality: " + prompt);
+		assertTrue(prompt.endsWith(CLOSING), "nothing was chopped off the end: " + prompt);
+	}
+
 	private static String prompt(PlayerMemory memory, String message, PromptBuilder.Context context) {
 		return PromptBuilder.buildSystemPrompt(
 			memory, new PersonalityProfile(), EmotionalState.CURIOUS, HorrorStage.INNOCENCE, true, message, context);
@@ -45,8 +63,7 @@ class PromptBuilderRulesTest {
 
 		assertTrue(prompt.length() <= PromptBuilder.MAX_SYSTEM_CHARS, "length " + prompt.length());
 		assertTrue(prompt.contains("Rules:"), prompt);
-		assertTrue(prompt.endsWith(LAST_RULE), "the rules come last and are never the part that is cut: " + prompt);
-		assertTrue(prompt.startsWith("You are Falsity"), prompt);
+		assertRulesComeFirstAndWhole(prompt);
 		assertFalse(prompt.endsWith("..."), "nothing was chopped off the end");
 	}
 
@@ -59,7 +76,7 @@ class PromptBuilderRulesTest {
 			"tell me about the base", context);
 
 		assertTrue(prompt.length() <= PromptBuilder.MAX_SYSTEM_CHARS, "length " + prompt.length());
-		assertTrue(prompt.endsWith(LAST_RULE), prompt);
+		assertRulesComeFirstAndWhole(prompt);
 		assertTrue(prompt.contains("Verified facts (checked by the game just now): fact fact"), prompt);
 		assertTrue(prompt.contains("Note: hint hint"), prompt);
 	}
@@ -154,7 +171,7 @@ class PromptBuilderRulesTest {
 		assertFalse(longFacts.contains("f".repeat(PromptBuilder.MAX_FACTS_CHARS + 1)));
 		assertTrue(longFacts.contains("h".repeat(PromptBuilder.MAX_HINT_CHARS - 3) + "...\n"));
 		assertFalse(longFacts.contains("h".repeat(PromptBuilder.MAX_HINT_CHARS + 1)));
-		assertTrue(longFacts.endsWith(LAST_RULE));
+		assertRulesComeFirstAndWhole(longFacts);
 	}
 
 	@Test
@@ -173,7 +190,7 @@ class PromptBuilderRulesTest {
 
 		assertTrue(prompt.startsWith("You are Falsity"), prompt);
 		assertTrue(prompt.contains("stranger"), prompt);
-		assertTrue(prompt.endsWith(LAST_RULE), prompt);
+		assertRulesComeFirstAndWhole(prompt);
 	}
 
 	@Test

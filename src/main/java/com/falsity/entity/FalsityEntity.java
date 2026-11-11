@@ -5,6 +5,7 @@ import com.falsity.ai.OfflineFallback;
 import com.falsity.behaviour.CompanionBehaviour;
 import com.falsity.behaviour.FollowOwnerGoal;
 import com.falsity.behaviour.PettingCooldown;
+import com.falsity.horror.HorrorEvent;
 import com.falsity.memory.PlayerMemory;
 import com.falsity.personality.PersonalityProfile;
 import net.minecraft.core.particles.ParticleTypes;
@@ -366,6 +367,11 @@ public class FalsityEntity extends PathfinderMob {
 			PlayerMemory memory = FalsityMod.memories().getOrCreate(player.getUUID(), name);
 			long daysAway = memory.daysSinceSeen(now);
 			memory.touch(now);
+			if (daysAway >= 1L) {
+				// Kept, so a conversation later the same day still knows the owner has only just come back.
+				memory.recordReturn(now, daysAway);
+				memory.addRecent(HorrorEvent.returned(now, daysAway).description(), FalsityMod.config().memory.maxRecentInteractions);
+			}
 			memory.recordPet(FalsityMod.config().memory.maxRecentInteractions);
 			FalsityMod.memories().save(player.getUUID());
 			FalsityMod.personalities().applyEvent(player.getUUID(), name, PersonalityProfile.Event.PETTED);
