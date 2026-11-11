@@ -470,6 +470,83 @@ class PersonalitySystemTest {
 		assertEquals(3, other.memory().kindWords);
 	}
 
+	// ---- speaking first -----------------------------------------------------
+
+	@Test
+	void aRemarkOfItsOwnIsBuiltFromTheSameLayersAsAnyReply() throws IOException {
+		writePersonality(CUSTOM);
+		Session session = new Session();
+		for (int index = 0; index < 25; index++) {
+			session.horror.recordInteraction(STEVE, "Steve");
+		}
+
+		PromptBuilder.Layers layers = session.say(PromptAssembler.SPEAK_FIRST_CUE, 5L * DAY);
+
+		String system = session.wire.lastSystem();
+		assertTrue(system.contains(CUSTOM), "the same personality: " + system);
+		assertTrue(system.contains(StageDirections.forStage(HorrorStage.STRANGE)), "in the voice of the same stage: " + system);
+		assertTrue(system.contains("Steve is your owner"), system);
+		assertTrue(system.contains("Verified facts (checked by the game just now)"), system);
+		assertTrue(layers.rules().contains("Never invent a memory"), "under the same rules");
+		JsonArray messages = session.wire.messages(0);
+		assertEquals(PromptAssembler.SPEAK_FIRST_CUE, messages.get(messages.size() - 1).getAsJsonObject().get("content").getAsString(),
+			"what stands where the player's message would be is the request to speak, nothing else");
+	}
+
+	@Test
+	void theRequestToSpeakFirstSuppliesNoWordsAndAsksForNoAction() {
+		String cue = PromptAssembler.SPEAK_FIRST_CUE;
+
+		assertTrue(cue.startsWith("(") && cue.endsWith(")"), "it is a stage direction, not something a player said");
+		assertTrue(cue.contains("of your own accord"), cue);
+		assertTrue(cue.contains("use no tag"), "a remark nobody asked for must not ask for an action: " + cue);
+		assertTrue(cue.contains("If the verified facts show danger, warn them"), "danger comes first: " + cue);
+		assertTrue(cue.contains("Do not greet them as if they had just arrived"), cue);
+		assertFalse(cue.contains("\"") || cue.contains("'"), "it quotes no line to say: " + cue);
+		assertTrue(cue.length() < 450, "and it is short: " + cue.length());
+	}
+
+	@Test
+	void whatFalsitySaidUnpromptedIsInFrontOfItWhenThePlayerAnswers() {
+		Session session = new Session();
+		long now = 5L * DAY;
+		PlayerMemory memory = session.memory();
+		int conversations = memory.conversationCount;
+		int interactions = memory.horror.interactionCount;
+
+		// What the conversation manager records when a remark of Falsity's own has been said.
+		session.history.record(STEVE, PromptAssembler.SILENCE, "The sun is going down.", now);
+		memory.recordUnprompted("The sun is going down.", session.config.memory.maxRecentInteractions);
+
+		assertEquals(conversations, memory.conversationCount, "nobody talked to it, so it is not counted as a conversation");
+		assertEquals(interactions, memory.horror.interactionCount, "and it is not an interaction for the horror system");
+		assertTrue(memory.recentInteractions.contains("Falsity: The sun is going down."), memory.recentInteractions.toString());
+		assertTrue(memory.lastExchanges(3).isEmpty(), "a line with no question before it is not an exchange");
+
+		session.say("it is. I like this time of day", now + 20_000L);
+
+		JsonArray messages = session.wire.messages(0);
+		assertEquals(4, messages.size(), "system prompt, the quiet, the remark, the answer");
+		assertEquals(PromptAssembler.SILENCE, messages.get(1).getAsJsonObject().get("content").getAsString());
+		assertEquals("user", messages.get(1).getAsJsonObject().get("role").getAsString());
+		assertEquals("The sun is going down.", messages.get(2).getAsJsonObject().get("content").getAsString());
+		assertEquals("assistant", messages.get(2).getAsJsonObject().get("role").getAsString());
+		assertEquals("it is. I like this time of day", messages.get(3).getAsJsonObject().get("content").getAsString());
+	}
+
+	@Test
+	void anUnpromptedLineIsKeptShortInMemory() {
+		PlayerMemory memory = new PlayerMemory("uuid", "Steve", 0L);
+
+		memory.recordUnprompted("word ".repeat(100), 20);
+		memory.recordUnprompted("   ", 20);
+		memory.recordUnprompted(null, 20);
+
+		assertEquals(1, memory.recentInteractions.size(), "blank lines leave no note");
+		assertTrue(memory.recentInteractions.get(0).startsWith("Falsity: word word"), memory.recentInteractions.get(0));
+		assertTrue(memory.recentInteractions.get(0).length() <= "Falsity: ".length() + 123, "length " + memory.recentInteractions.get(0).length());
+	}
+
 	// ---- secrets and size ---------------------------------------------------
 
 	@Test

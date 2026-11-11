@@ -133,6 +133,12 @@ public class FalsityMod implements ModInitializer {
 		conversations.setItemCatalog(ItemAssistance.CATALOG);
 		conversations.setWorldFacts((player, falsity) -> WorldService.facts(player, falsity, config));
 		conversations.setPersonalityPrompts(personalityPrompts);
+		// When Falsity has spoken first, the player's next message is an answer to it, name or no name.
+		conversations.setSpokeFirstListener((player, falsity) -> {
+			if (contexts != null) {
+				contexts.activate(player.getUUID(), falsity.getUUID());
+			}
+		});
 
 		actions = executor;
 		confirmations = confirmationManager;

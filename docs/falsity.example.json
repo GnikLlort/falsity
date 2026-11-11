@@ -1,5 +1,5 @@
 {
-  "configVersion": 2,
+  "configVersion": 3,
   "debugLogging": false,
   "companion": {
     "followOwner": true,
@@ -54,7 +54,9 @@
     "enabled": true,
     "contextTimeoutSeconds": 120,
     "maxConversationDistance": 32.0,
-    "maxMessageLength": 256
+    "maxMessageLength": 256,
+    "speaksFirst": true,
+    "speaksFirstMinutes": 10
   },
   "items": {
     "enabled": true,

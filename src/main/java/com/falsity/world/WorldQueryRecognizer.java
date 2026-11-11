@@ -41,15 +41,21 @@ public final class WorldQueryRecognizer {
 		+ "|\\bwhere(?:'s| is) (?:my|our) (?:position|location)\\b"
 		+ "|\\bwhat (?:coordinates|coords) (?:am i|are we)\\b");
 
+	/** "What a lovely biome" admires it; it does not ask which one it is. */
 	private static final Pattern BIOME = Pattern.compile(
-		"\\b(?:what|which|whats|tell me|name)\\b.*\\bbiome\\b|\\bbiome (?:am i|are we|is this|is it|are you)\\b|^(?:this |the |current )?biome$");
+		"\\b(?:what(?! an? )|which|whats|tell me|name)\\b.*\\bbiome\\b|\\bbiome (?:am i|are we|is this|is it|are you)\\b|^(?:this |the |current )?biome$");
 
 	private static final Pattern DIMENSION = Pattern.compile(
 		"\\b(?:what|which|whats)\\b.*\\bdimension\\b|\\bdimension (?:am i|are we|is this|is it)\\b"
 		+ "|\\b(?:am i|are we|is this) (?:in )?the (?:nether|end|overworld)\\b|^(?:this |the |current )?dimension$");
 
+	/**
+	 * "Time of day" is only a question when something asks for it ("tell me the
+	 * time of day"); "I like this time of day" is a remark.
+	 */
 	private static final Pattern TIME = Pattern.compile(
-		"\\bwhat time\\b|\\bwhat(?:'s| is) the time\\b|\\bwhats the time\\b|\\btime of day\\b|\\btime is it\\b"
+		"\\bwhat time\\b|\\bwhat(?:'s| is) the time\\b|\\bwhats the time\\b|\\btime is it\\b"
+		+ "|\\b(?:what(?:'s| is)?|whats|which|tell me|say|know|check) (?:the )?time of day\\b|^(?:the )?time of day$"
 		+ "|\\bis it (?:still |already |almost |nearly )?(?:day|night|daytime|nighttime|night time|day time|morning|evening|dark|noon|midnight|dawn|dusk|sunset|sunrise|late|early)\\b"
 		+ "|\\bhow long (?:until|till|til|before|is it until) (?:it'?s |it is |it gets )?(?:night|day|morning|dawn|dusk|sunrise|sunset|dark|nightfall|daylight|daytime|nighttime)\\b"
 		+ "|\\bwhen (?:is|does|will) (?:it (?:be|get) )?(?:night|morning|day|sunrise|sunset|nightfall|dark|dawn|dusk)\\b"
@@ -57,7 +63,10 @@ public final class WorldQueryRecognizer {
 
 	private static final Pattern WEATHER = Pattern.compile(
 		"\\bis it (?:still |going to |gonna )?(?:rain|raining|rainy|snowing|snow|storming|stormy|thundering|sunny|clear)\\b"
-		+ "|\\b(?:what(?:'s| is)|whats|how(?:'s| is)|hows) the weather\\b|\\bweather like\\b|\\bis there a (?:storm|thunderstorm)\\b|^(?:the )?weather$");
+		+ "|\\b(?:what(?:'s| is)|whats|how(?:'s| is)|hows) the weather\\b"
+		// "what will the weather be like" asks; "I love weather like this" does not.
+		+ "|\\bweather (?:going to be |gonna be |be )?like\\b(?! (?:this|that|these|those|it)\\b)"
+		+ "|\\bis there a (?:storm|thunderstorm)\\b|^(?:the )?weather$");
 
 	private static final Pattern BLOCK_BELOW = Pattern.compile(
 		"\\bwhat (?:block |kind of block |type of block )?(?:am i|are we|are you) (?:standing|walking|sitting) on\\b"
@@ -67,8 +76,15 @@ public final class WorldQueryRecognizer {
 	private static final Pattern SPAWN = Pattern.compile(
 		"\\b(?:where(?:'s| is)|wheres|which way is|which way to|how far is|how far to|direction to|way to|find|locate) (?:the )?(?:world )?spawn(?: point|point)?\\b");
 
+	/**
+	 * "Look around" is a request when it is said to Falsity. Said of oneself
+	 * ("let me look around", "I'll look around first", "we should look
+	 * around") it is a plan, and plans are conversation.
+	 */
 	private static final Pattern SURROUNDINGS = Pattern.compile(
-		"\\bwhat (?:do|can) you see\\b|\\blook around\\b|\\bwhat(?:'s| is) (?:around|out there)\\b|\\bdescribe (?:this place|the area|where we are|our surroundings|the surroundings)\\b"
+		"\\bwhat (?:do|can) you see\\b"
+		+ "|(?<!\\b(?:i|we|me|us|to|i'll|we'll|ill|gonna|wanna|should|will|shall|might|can|could|would|must) )(?<!\\blet's )(?<!\\blets )\\blook around\\b"
+		+ "|\\bwhat(?:'s| is) (?:around|out there)\\b|\\bdescribe (?:this place|the area|where we are|our surroundings|the surroundings)\\b"
 		+ "|\\bwhat(?:'s| is) this place\\b|\\bwhat is around (?:us|me|here)\\b");
 
 	private static final Pattern CAVE_WORD = Pattern.compile("\\b(?:cave|caves|cavern|caverns|ravine|ravines)\\b");

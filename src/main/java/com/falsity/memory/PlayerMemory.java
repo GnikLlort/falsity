@@ -113,6 +113,18 @@ public final class PlayerMemory {
 		addRecent(FALSITY_PREFIX + truncate(falsityReplied, 120), maxRecent);
 	}
 
+	/**
+	 * Records something Falsity said without being spoken to. It is kept as a
+	 * note like any other line of Falsity's, but it is not a conversation: the
+	 * player has not done anything, so nothing is counted.
+	 */
+	public void recordUnprompted(String falsitySaid, int maxRecent) {
+		String line = truncate(falsitySaid, 120);
+		if (!line.isEmpty()) {
+			addRecent(FALSITY_PREFIX + line, maxRecent);
+		}
+	}
+
 	/** Records a petting interaction. */
 	public void recordPet(int maxRecent) {
 		this.petCount++;

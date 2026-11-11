@@ -27,12 +27,15 @@ import com.falsity.personality.StageDirections;
 import com.falsity.world.WorldQueryRecognizer;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BiConsumer;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 import net.minecraft.network.chat.Component;
@@ -64,6 +67,11 @@ import org.slf4j.LoggerFactory;
  *       empty reply) is logged with its reason and answered by
  *       {@link OfflineFallback}, which replies to what was actually said.</li>
  * </ol>
+ *
+ * <p>Falsity may also speak first. Now and then, when its owner is close and
+ * nobody has been talking, {@link #offerToSpeakFirst} asks Groq for a remark
+ * of Falsity's own. {@link InitiativePacer} keeps that rare, it never happens
+ * without Groq, and a remark nobody asked for can never carry out an action.
  *
  * <p>The model never acts on the world. It may ask for an action with a tag;
  * the server parses it, checks it and decides. Where the model's words and the
@@ -101,6 +109,9 @@ public final class ConversationManager {
 
 	private final ConversationPacer<Waiting> pacer = new ConversationPacer<>();
 	private final ConversationHistory history = new ConversationHistory();
+	private final InitiativePacer initiative = new InitiativePacer();
+	/** When words last passed between Falsity and each player, either way. */
+	private final Map<UUID, Long> lastExchange = new HashMap<>();
 	private final AtomicLong turnCounter = new AtomicLong();
 
 	private Supplier<FalsityConfig> configSource;
@@ -108,6 +119,7 @@ public final class ConversationManager {
 	private ItemCatalog itemCatalog;
 	private WorldFacts worldFacts;
 	private PersonalityPromptStore personalityPrompts = PersonalityPromptStore.builtIn();
+	private BiConsumer<Player, FalsityEntity> spokeFirstListener;
 
 	/**
 	 * A message waiting for the player's turn.
@@ -223,6 +235,15 @@ public final class ConversationManager {
 	/** Where the personality text comes from, for status reporting and reloading. */
 	public PersonalityPromptStore personalityPrompts() {
 		return this.personalityPrompts;
+	}
+
+	/**
+	 * Told, on the server thread, each time Falsity has said something without
+	 * being spoken to. The chat listener uses it to treat the player's next
+	 * message as an answer, without Falsity having to be named.
+	 */
+	public void setSpokeFirstListener(BiConsumer<Player, FalsityEntity> listener) {
+		this.spokeFirstListener = listener;
 	}
 
 	/** The Groq client, for status reporting. */
@@ -438,15 +459,7 @@ public final class ConversationManager {
 		UUID playerUuid = turn.player.getUUID();
 		ServerLevel level = turn.falsity.level() instanceof ServerLevel serverLevel ? serverLevel : null;
 
-		String facts = "";
-		if (this.worldFacts != null && config.world.enabled) {
-			try {
-				facts = this.worldFacts.factsFor(turn.player, turn.falsity);
-			} catch (RuntimeException exception) {
-				LOGGER.warn("Could not gather world facts for a prompt: {}", exception.toString());
-			}
-		}
-		turn.verifiedFacts = facts == null ? "" : facts;
+		turn.verifiedFacts = gatherFacts(turn, config);
 
 		String hint = "";
 		if (!turn.unknownItem.isEmpty()) {
@@ -458,19 +471,7 @@ public final class ConversationManager {
 
 		List<GroqClient.ChatMessage> messages;
 		try {
-			// Saving config/falsity/personality.txt is enough: a changed file is read again here.
-			PersonalityPrompt personality = this.personalityPrompts.refreshIfChanged();
-			PromptAssembler.Assembled assembled = PromptAssembler.assemble(
-				personality,
-				new PromptAssembler.Turn(
-					turn.falsity.getName().getString(), turn.memory, turn.personality, turn.voice, turn.isOwner,
-					turn.daysAway, turn.message, turn.verifiedFacts, hint),
-				this.history.recent(playerUuid, config.groq.historyTurns, now),
-				now,
-				apiKey);
-			messages = assembled.messages();
-			FalsityMod.debug("Turn {} for {}: prompt is {}; {}; {} voice.", turn.id, turn.player.getName().getString(),
-				assembled.layers().sizes(), personality.describe(), StageDirections.voiceName(turn.voice));
+			messages = assemble(turn, hint, apiKey, config, now);
 		} catch (RuntimeException exception) {
 			// Never a reason to leave the player without an answer.
 			LOGGER.warn("Falsity could not build a prompt for {}; an offline line was used. ({})",
@@ -501,6 +502,168 @@ public final class ConversationManager {
 					deliver.run();
 				}
 			});
+	}
+
+	/** What the server can verify about the world for this turn, or an empty string. */
+	private String gatherFacts(Turn turn, FalsityConfig config) {
+		if (this.worldFacts == null || !config.world.enabled) {
+			return "";
+		}
+		try {
+			String facts = this.worldFacts.factsFor(turn.player, turn.falsity);
+			return facts == null ? "" : facts;
+		} catch (RuntimeException exception) {
+			LOGGER.warn("Could not gather world facts for a prompt: {}", exception.toString());
+			return "";
+		}
+	}
+
+	/** Builds the request for a turn, layer by layer. */
+	private List<GroqClient.ChatMessage> assemble(Turn turn, String hint, String apiKey, FalsityConfig config, long now) {
+		// Saving config/falsity/personality.txt is enough: a changed file is read again here.
+		PersonalityPrompt personality = this.personalityPrompts.refreshIfChanged();
+		PromptAssembler.Assembled assembled = PromptAssembler.assemble(
+			personality,
+			new PromptAssembler.Turn(
+				turn.falsity.getName().getString(), turn.memory, turn.personality, turn.voice, turn.isOwner,
+				turn.daysAway, turn.message, turn.verifiedFacts, hint),
+			this.history.recent(turn.player.getUUID(), config.groq.historyTurns, now),
+			now,
+			apiKey);
+		FalsityMod.debug("Turn {} for {}: prompt is {}; {}; {} voice.", turn.id, turn.player.getName().getString(),
+			assembled.layers().sizes(), personality.describe(), StageDirections.voiceName(turn.voice));
+		return assembled.messages();
+	}
+
+	/**
+	 * Lets Falsity say something of its own accord, if this is a good moment
+	 * for it. Called now and then by a companion whose owner is close. Returns
+	 * whether a remark was asked for; most calls return false at once.
+	 *
+	 * <p>It only happens with Groq: there are no lines written in advance for
+	 * this, so without a working key Falsity simply stays quiet. The remark is
+	 * not a conversation. Nothing is counted towards memory, personality or
+	 * horror progression, because the player has not done anything.
+	 */
+	public synchronized boolean offerToSpeakFirst(Player player, FalsityEntity falsity) {
+		FalsityConfig config = config();
+		if (!config.chat.speaksFirst || !config.chat.enabled || !config.conversation.enabled || !config.groq.enabled) {
+			return false;
+		}
+		UUID playerUuid = player.getUUID();
+		if (player.isRemoved() || !player.isAlive() || falsity.isRemoved() || !falsity.isBondedTo(playerUuid)) {
+			return false;
+		}
+		long now = this.clock.getAsLong();
+		if (this.pacer.isBusy(playerUuid, now) || this.pacer.peek(playerUuid) != null) {
+			return false;
+		}
+
+		String playerName = player.getName().getString();
+		PlayerMemory memory = this.memories.getOrCreate(playerUuid, playerName);
+		Long exchanged = this.lastExchange.get(playerUuid);
+		if (!this.initiative.claim(playerUuid, now, config.chat.speaksFirstMinutes * 60_000L,
+			exchanged == null ? 0L : exchanged, memory.lastSeenEpochMillis)) {
+			return false;
+		}
+		// The moment is spent from here on, whatever becomes of it: nothing below can be tried again before the next one.
+		String apiKey = this.apiKeys.resolve(config, this.gameDir).orElse("");
+		if (apiKey.isEmpty()) {
+			return false;
+		}
+		// Conversations come first: a remark nobody asked for never takes the second half of the minute's requests.
+		int requestsPerMinute = Math.max(1, config.conversation.maxRequestsPerMinute / 2);
+		if (this.groq.rateLimiter().millisUntilAvailable(requestsPerMinute) > 0L) {
+			return false;
+		}
+
+		PersonalityProfile personality = this.personalities.profileFor(playerUuid, playerName);
+		HorrorStage voice = PromptAssembler.voiceStage(this.horror, playerUuid, playerName);
+		Turn turn = new Turn(this.turnCounter.incrementAndGet(), player, falsity, PromptAssembler.SPEAK_FIRST_CUE,
+			true, memory, personality, voice, 0L);
+		turn.verifiedFacts = gatherFacts(turn, config);
+
+		List<GroqClient.ChatMessage> messages;
+		try {
+			messages = assemble(turn, "", apiKey, config, now);
+		} catch (RuntimeException exception) {
+			LOGGER.warn("Falsity could not build a prompt to speak first to {}. ({})", playerName, exception.toString());
+			return false;
+		}
+
+		ServerLevel level = falsity.level() instanceof ServerLevel serverLevel ? serverLevel : null;
+		this.pacer.markBusy(playerUuid, now);
+		this.groq.exchange(new GroqClient.Request(
+				config.groq.endpoint,
+				apiKey,
+				config.groq.model,
+				messages,
+				config.groq.temperature,
+				config.groq.maxTokens,
+				config.groq.timeoutSeconds,
+				requestsPerMinute,
+				config.groq.reasoningEffort,
+				config.groq.reasoningHeadroomTokens
+			))
+			.whenComplete((exchange, error) -> {
+				Runnable deliver = () -> deliverUnprompted(turn, exchange, error, now);
+				if (level != null && level.getServer() != null) {
+					level.getServer().execute(deliver);
+				} else {
+					deliver.run();
+				}
+			});
+		return true;
+	}
+
+	private synchronized void deliverUnprompted(Turn turn, GroqClient.Exchange exchange, Throwable error, long requestedAt) {
+		UUID playerUuid = turn.player.getUUID();
+		this.pacer.markIdle(playerUuid);
+		String playerName = turn.player.getName().getString();
+		if (turn.player.isRemoved() || !turn.player.isAlive()
+			|| turn.falsity.isRemoved() || !turn.falsity.getUUID().equals(turn.falsityId)) {
+			return;
+		}
+
+		GroqClient.Diagnostics diagnostics = exchange == null ? null : exchange.diagnostics();
+		if (error != null || exchange == null || !(exchange.result() instanceof GroqClient.Result.Success success)) {
+			// Nothing was asked, so nothing is owed: no offline line, only a note for whoever is debugging.
+			FalsityMod.debug("Falsity had a moment to speak first to {} but Groq did not answer. {}",
+				playerName, diagnostics == null ? "error=" + error : diagnostics.summary());
+			return;
+		}
+
+		// A conversation that began while this was on its way wins: the remark would only cut across it.
+		Long exchanged = this.lastExchange.get(playerUuid);
+		if ((exchanged != null && exchanged > requestedAt) || this.pacer.peek(playerUuid) != null) {
+			FalsityMod.debug("Falsity kept a remark for {} to itself: they had started talking.", playerName);
+			return;
+		}
+
+		// Words only. A remark nobody asked for never carries out an action, whatever tag it came with.
+		String dialogue = AIResponseParser.parse(success.content()).map(parsed -> parsed.dialogue()).orElse(null);
+		if (dialogue == null || dialogue.isBlank()) {
+			return;
+		}
+		if (!ReplyComposer.guardLocation(dialogue, turn.verifiedFacts).equals(dialogue)) {
+			LOGGER.info("Falsity discarded a remark of its own for {} that quoted an unverified location.", playerName);
+			return;
+		}
+
+		long now = this.clock.getAsLong();
+		say(turn.player, turn.falsity, dialogue);
+		this.history.record(playerUuid, PromptAssembler.SILENCE, dialogue, now);
+		turn.memory.recordUnprompted(dialogue, config().memory.maxRecentInteractions);
+		this.memories.save(playerUuid);
+		this.lastExchange.put(playerUuid, now);
+		if (this.spokeFirstListener != null) {
+			try {
+				this.spokeFirstListener.accept(turn.player, turn.falsity);
+			} catch (RuntimeException exception) {
+				LOGGER.warn("Could not open the conversation after Falsity spoke first: {}", exception.toString());
+			}
+		}
+		LOGGER.info("Falsity said something to {} without being asked. {}", playerName, diagnostics.summary());
 	}
 
 	private synchronized void deliverGroq(Turn turn, GroqClient.Exchange exchange, Throwable error) {
@@ -615,7 +778,9 @@ public final class ConversationManager {
 		String playerName = turn.player.getName().getString();
 		say(turn.player, turn.falsity, reply);
 
-		this.history.record(playerUuid, turn.message, reply, this.clock.getAsLong());
+		long now = this.clock.getAsLong();
+		this.history.record(playerUuid, turn.message, reply, now);
+		this.lastExchange.put(playerUuid, now);
 		turn.memory.recordConversation(turn.message, reply, config.memory.maxRecentInteractions);
 		// Kind words, harsh words or neither: how the player speaks to Falsity is part of the relationship.
 		turn.memory.recordTreatment(OfflineFallback.treatmentOf(turn.message));

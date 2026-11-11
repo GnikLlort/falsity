@@ -41,14 +41,15 @@ public final class FalsityConfig {
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
 	/** The settings format written by this version of the mod. */
-	public static final int CURRENT_VERSION = 2;
+	public static final int CURRENT_VERSION = 3;
 
 	/** The conversation cooldown that shipped before version 2 of the format. */
 	private static final int LEGACY_COOLDOWN_SECONDS = 10;
 
 	/**
-	 * Format version of the file. Absent (0) in files written before 0.2.2;
-	 * {@link #migrate()} brings those up to date. Not meant to be edited.
+	 * Format version of the file. Absent (0) in files written before 0.2.2,
+	 * 2 in files written by 0.2.2; {@link #migrate()} brings those up to
+	 * date. Not meant to be edited.
 	 */
 	public int configVersion;
 
@@ -228,6 +229,16 @@ public final class FalsityConfig {
 		public double maxConversationDistance = 32.0;
 		/** Longest accepted message, in characters. */
 		public int maxMessageLength = 256;
+		/**
+		 * Whether Falsity may say something of its own accord now and then,
+		 * when its owner is close and nobody has been talking. Each such
+		 * remark is one Groq request; without Groq Falsity only ever answers.
+		 * After two remarks in a row that the player does nothing about, it
+		 * stays quiet until the player talks to it or pets it again.
+		 */
+		public boolean speaksFirst = true;
+		/** Least minutes between two such remarks to the same player. */
+		public int speaksFirstMinutes = 10;
 	}
 
 	/**
@@ -479,6 +490,10 @@ public final class FalsityConfig {
 	 * requests and late messages are held, so a file that still carries the old
 	 * default is moved to the new one. Any other value was chosen by hand and is
 	 * kept.
+	 *
+	 * <p>Format 3 changes no existing value. It adds {@code chat.speaksFirst}
+	 * and {@code chat.speaksFirstMinutes}, and moving a file up to it is what
+	 * gets them written out where they can be found and edited.
 	 */
 	public boolean migrate() {
 		if (this.configVersion >= CURRENT_VERSION) {
@@ -598,6 +613,7 @@ public final class FalsityConfig {
 		chat.contextTimeoutSeconds = clampInt(chat.contextTimeoutSeconds, 0, 3600);
 		chat.maxConversationDistance = clamp(chat.maxConversationDistance, 4.0, 256.0);
 		chat.maxMessageLength = clampInt(chat.maxMessageLength, 16, 1024);
+		chat.speaksFirstMinutes = clampInt(chat.speaksFirstMinutes, 2, 240);
 
 		if (items.permissionMode == null) {
 			items.permissionMode = ItemPermissionMode.OWNER;

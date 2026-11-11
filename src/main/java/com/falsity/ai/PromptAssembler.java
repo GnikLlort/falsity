@@ -24,6 +24,21 @@ public final class PromptAssembler {
 	/** How many exchanges of the previous conversation are recalled when there is no live transcript. */
 	public static final int EARLIER_EXCHANGES = 2;
 
+	/**
+	 * What takes the place of the player's message when Falsity speaks without
+	 * having been spoken to. It asks for a remark and supplies none: what is
+	 * said has to come from the personality, the stage, the memories and the
+	 * verified facts, like any other line.
+	 */
+	public static final String SPEAK_FIRST_CUE =
+		"(The player has not said anything for a while. Say one short thing of your own accord, as you would if you were "
+		+ "simply there with them: something you notice about where you are or the time of day, a question about what they "
+		+ "are doing, or something you remember about them. If the verified facts show danger, warn them instead. Do not "
+		+ "greet them as if they had just arrived, and use no tag.)";
+
+	/** What stands in the transcript for the player's side when Falsity spoke first. */
+	public static final String SILENCE = "(the player was quiet)";
+
 	private PromptAssembler() {
 	}
 

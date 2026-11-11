@@ -140,7 +140,7 @@ class FalsityConfigMigrationTest {
 
 		assertEquals(3, config.conversation.cooldownSeconds);
 		String rewritten = Files.readString(file(), StandardCharsets.UTF_8);
-		assertTrue(rewritten.contains("\"configVersion\": 2"), rewritten);
+		assertTrue(rewritten.contains("\"configVersion\": " + FalsityConfig.CURRENT_VERSION), rewritten);
 		assertTrue(rewritten.contains("\"world\""), "new sections are written out so they can be found and edited");
 		assertTrue(rewritten.contains("\"reasoningEffort\""));
 		assertTrue(rewritten.contains("\"OPERATOR\""), "what the owner had set is still there");
