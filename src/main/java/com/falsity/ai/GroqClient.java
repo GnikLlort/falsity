@@ -134,6 +134,16 @@ public final class GroqClient {
 			reasoningEffort = reasoningEffort == null ? "" : reasoningEffort.trim().toLowerCase(Locale.ROOT);
 			reasoningHeadroomTokens = Math.max(0, reasoningHeadroomTokens);
 		}
+
+		/**
+		 * Whether a reply that was cut off before any text appeared is worth
+		 * one more attempt with a larger budget. Only when the caller asked
+		 * for reasoning handling; the original {@code chat} entry point never
+		 * retries.
+		 */
+		boolean retryOnEmpty() {
+			return !this.reasoningEffort.isEmpty();
+		}
 	}
 
 	/**
@@ -302,9 +312,9 @@ public final class GroqClient {
 	 * never completes exceptionally.
 	 *
 	 * <p>Two automatic retries exist, each used at most once per request: if
-	 * Groq rejects the reasoning parameters (HTTP 400) the request is repeated
-	 * without them, and if a reasoning model spends its whole budget thinking
-	 * and returns nothing, the request is repeated with a larger budget.
+	 * Groq rejects a request that carried reasoning settings (HTTP 400) it is
+	 * repeated without them, and if the model uses its whole budget without
+	 * producing any text, the request is repeated with a larger budget.
 	 */
 	public CompletableFuture<Exchange> exchange(Request request) {
 		String requestId = "f" + Long.toString(this.requestCounter.incrementAndGet(), 36);
@@ -319,15 +329,19 @@ public final class GroqClient {
 			String detail = "local limit of " + Math.max(1, request.maxRequestsPerMinute())
 				+ " requests per minute reached (conversation.maxRequestsPerMinute)";
 			return CompletableFuture.completedFuture(finish(failed(
-				requestId, model, startNanos, 0, 0, Failure.RATE_LIMITED, detail, 0L, null)));
+				requestId, model, startNanos, 0, 0, Failure.RATE_LIMITED, detail,
+				this.rateLimiter.millisUntilAvailable(request.maxRequestsPerMinute()), null)));
 		}
 
-		boolean reasoning = usesReasoningParameters(model, request.reasoningEffort()) && !this.plainOnlyModels.contains(model);
-		int completionTokens = reasoning
+		// A reasoning model needs room to think whether or not the reasoning
+		// settings themselves are sent, so the budget depends on the model alone.
+		boolean reasoningModel = usesReasoningParameters(model, request.reasoningEffort());
+		boolean reasoning = reasoningModel && !this.plainOnlyModels.contains(model);
+		int completionTokens = reasoningModel
 			? request.maxTokens() + request.reasoningHeadroomTokens()
 			: request.maxTokens();
 
-		return attempt(request, requestId, startNanos, 1, reasoning, completionTokens, false)
+		return attempt(request, requestId, startNanos, 1, reasoning, completionTokens, false, false)
 			.exceptionally(error -> failed(
 				requestId, model, startNanos, 0, 1, classify(error), describeError(error), 0L, null))
 			.thenApply(this::finish);
@@ -340,7 +354,8 @@ public final class GroqClient {
 		int attemptNumber,
 		boolean reasoning,
 		int completionTokens,
-		boolean budgetRetried
+		boolean budgetRetried,
+		boolean reasoningRejected
 	) {
 		String model = request.model() == null ? "" : request.model();
 		String body = reasoning
@@ -370,13 +385,12 @@ public final class GroqClient {
 
 			int status = httpResult.statusCode();
 			if (status == 400 && reasoning) {
-				// The model (or an OpenAI-compatible proxy) does not accept the
-				// reasoning parameters. Remember that and send the plain request.
-				this.plainOnlyModels.add(model);
+				// Possibly the model (or an OpenAI-compatible proxy) does not accept
+				// the reasoning settings. Try once without them, keeping the budget.
 				LOGGER.info(
-					"Groq rejected the reasoning parameters for model {} ({}); retrying without them.",
+					"Groq rejected a request with reasoning settings for model {} ({}); retrying without them.",
 					model, errorDetail(httpResult.body()));
-				return attempt(request, requestId, startNanos, attemptNumber + 1, false, request.maxTokens(), budgetRetried);
+				return attempt(request, requestId, startNanos, attemptNumber + 1, false, completionTokens, budgetRetried, true);
 			}
 			if (status < 200 || status >= 300) {
 				return CompletableFuture.completedFuture(failed(
@@ -384,15 +398,21 @@ public final class GroqClient {
 					errorDetail(httpResult.body()), retryAfterMillis(httpResult), null));
 			}
 
+			if (reasoningRejected) {
+				// The plain request went through, so the reasoning settings were the
+				// problem: stop sending them to this model.
+				this.plainOnlyModels.add(model);
+			}
+
 			ParsedResponse parsed = parseResponse(httpResult.body());
 			if (parsed.content().isEmpty()) {
 				boolean ranOutThinking = "length".equals(parsed.finishReason());
-				if (ranOutThinking && reasoning && !budgetRetried && completionTokens < MAX_RETRY_COMPLETION_TOKENS) {
+				if (ranOutThinking && request.retryOnEmpty() && !budgetRetried && completionTokens < MAX_RETRY_COMPLETION_TOKENS) {
 					int larger = Math.min(MAX_RETRY_COMPLETION_TOKENS, completionTokens * 2 + 256);
 					LOGGER.info(
-						"Groq model {} used all {} completion tokens on reasoning and returned no reply; retrying once with {}.",
+						"Groq model {} used all {} completion tokens without producing a reply; retrying once with {}.",
 						model, completionTokens, larger);
-					return attempt(request, requestId, startNanos, attemptNumber + 1, true, larger, true);
+					return attempt(request, requestId, startNanos, attemptNumber + 1, reasoning, larger, true, false);
 				}
 				String detail;
 				if (!parsed.hasChoices()) {
@@ -747,6 +767,23 @@ public final class GroqClient {
 			}
 			this.requestTimes.add(now);
 			return true;
+		}
+
+		/**
+		 * Milliseconds until a request would be accepted again; zero when one
+		 * would be accepted now.
+		 */
+		public synchronized long millisUntilAvailable(int maxRequestsPerMinute) {
+			long now = System.currentTimeMillis();
+			long windowStart = now - 60_000L;
+			this.requestTimes.removeIf(time -> time < windowStart);
+			int limit = Math.max(1, maxRequestsPerMinute);
+			if (this.requestTimes.size() < limit) {
+				return 0L;
+			}
+			// The slot frees when the oldest request that still counts leaves the window.
+			long oldestCounting = this.requestTimes.get(this.requestTimes.size() - limit);
+			return Math.max(1L, oldestCounting + 60_000L - now);
 		}
 
 		/** Requests recorded in the current window. Visible for tests. */

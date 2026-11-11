@@ -39,6 +39,7 @@ import com.falsity.world.WorldService;
 import java.nio.file.Path;
 import java.util.Optional;
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.resources.Identifier;
 import org.slf4j.Logger;
@@ -129,6 +130,9 @@ public class FalsityMod implements ModInitializer {
 		contexts = contextManager;
 
 		NaturalChatListener.register();
+		// Waiting messages are released here, so they are answered (or dropped
+		// with a log line) even if the companion they were said to is gone.
+		ServerTickEvents.END_SERVER_TICK.register(server -> expireIdleState());
 
 		LOGGER.info(
 			"Falsity ready ({} companions registered, debug logging {}). {}",

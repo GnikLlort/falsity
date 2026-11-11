@@ -101,8 +101,13 @@ public final class ConversationManager {
 	private ItemCatalog itemCatalog;
 	private WorldFacts worldFacts;
 
-	/** A message waiting for the player's turn. */
-	private record Waiting(Player player, FalsityEntity falsity, String message, int attempt) {
+	/**
+	 * A message waiting for the player's turn.
+	 *
+	 * @param unknownItem what the player asked for that is not an item, or empty
+	 * @param attempt     how many times this message has already been sent to Groq
+	 */
+	private record Waiting(Player player, FalsityEntity falsity, String message, String unknownItem, int attempt) {
 	}
 
 	/** Everything one turn needs, gathered once on the server thread. */
@@ -284,7 +289,9 @@ public final class ConversationManager {
 
 		// 3. Conversation with Groq: one request per cooldown, one at a time; the rest wait.
 		long cooldownMillis = config.conversation.cooldownSeconds * 1000L;
-		if (!this.pacer.isBusy(playerUuid, now) && tryStartRequest(playerUuid, now)) {
+		Waiting earlier = this.pacer.peek(playerUuid);
+		// A message that is already waiting goes first, so a new one joins it.
+		if (earlier == null && !this.pacer.isBusy(playerUuid, now) && tryStartRequest(playerUuid, now)) {
 			Turn turn = openTurn(player, falsity, cleaned, now, config);
 			turn.unknownItem = unknownItem;
 			sendToGroq(turn, apiKey, config, now);
@@ -295,16 +302,19 @@ public final class ConversationManager {
 		if (wait > MAX_QUEUE_WAIT_MILLIS) {
 			return Outcome.ON_COOLDOWN;
 		}
-		Waiting earlier = this.pacer.peek(playerUuid);
 		String queued = cleaned;
+		String queuedUnknownItem = unknownItem;
 		if (earlier != null) {
 			// Keep both rather than lose the earlier one.
 			String merged = earlier.message() + " " + cleaned;
 			if (merged.length() <= config.conversation.maxMessageLength) {
 				queued = merged;
+				if (queuedUnknownItem.isEmpty()) {
+					queuedUnknownItem = earlier.unknownItem();
+				}
 			}
 		}
-		this.pacer.enqueue(playerUuid, new Waiting(player, falsity, queued, 0), now);
+		this.pacer.enqueue(playerUuid, new Waiting(player, falsity, queued, queuedUnknownItem, 0), now);
 		FalsityMod.debug("Queued a message from {} ({} ms until their turn).", player.getName().getString(), wait);
 		return Outcome.QUEUED;
 	}
@@ -333,6 +343,7 @@ public final class ConversationManager {
 
 			Turn turn = openTurn(player, falsity, waiting.message(), now, config);
 			turn.attempt = waiting.attempt();
+			turn.unknownItem = waiting.unknownItem();
 			String apiKey = config.groq.enabled ? this.apiKeys.resolve(config, this.gameDir).orElse("") : "";
 			if (apiKey.isEmpty()) {
 				deliverOffline(turn, config);
@@ -362,8 +373,9 @@ public final class ConversationManager {
 			config.groq.temperature,
 			config.groq.maxTokens,
 			config.groq.timeoutSeconds,
-			// A test must not be refused by the local limiter it is trying to diagnose.
-			Math.max(config.conversation.maxRequestsPerMinute, 1),
+			// A test is counted like any request but is never refused by the
+			// local limiter: the point is to see what Groq itself says.
+			Integer.MAX_VALUE,
 			config.groq.reasoningEffort,
 			config.groq.reasoningHeadroomTokens
 		));
@@ -459,7 +471,7 @@ public final class ConversationManager {
 				&& this.pacer.peek(playerUuid) == null) {
 				LOGGER.info("Groq asked Falsity to slow down; retrying {}'s message in {} ms. ({})",
 					playerName, diagnostics.retryAfterMillis(), diagnostics.summary());
-				this.pacer.enqueue(playerUuid, new Waiting(turn.player, turn.falsity, turn.message, 1),
+				this.pacer.enqueue(playerUuid, new Waiting(turn.player, turn.falsity, turn.message, turn.unknownItem, 1),
 					this.clock.getAsLong() + diagnostics.retryAfterMillis());
 				return;
 			}
