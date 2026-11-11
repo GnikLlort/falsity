@@ -1,4 +1,4 @@
-# Falsity 0.2.1
+# Falsity 0.2.2
 
 An original AI horror companion for **Minecraft Java 26.3**, built with **Fabric**.
 
@@ -7,10 +7,12 @@ teal beanie, oversized glossy eyes and long drooping ears. It wanders, watches
 you, and bonds with the first player who reaches out to it. What happens after
 that is the rest of this project.
 
-> **Status: Milestone 2 (intelligence).** Falsity now talks (Groq AI with an
-> offline fallback), remembers each player across sessions, has a persistent
-> evolving personality, and has the first, harmless step of its horror
-> progression. It is still cute. It is still harmless. That is the point.
+> **Status: Milestone 3 (interactive companion), hardened in 0.2.2.** Falsity
+> talks in ordinary chat (Groq AI with an offline fallback), follows orders,
+> hands over items, answers questions about the world, builds, remembers each
+> player across sessions, has a persistent evolving personality, and has the
+> first, harmless step of its horror progression. It is still cute. It is still
+> harmless. That is the point.
 
 ![Falsity, first form](docs/images/falsity_model_preview.png)
 
@@ -30,10 +32,12 @@ that is the rest of this project.
 | Spawning | Spawn egg (creative *Spawn Eggs* tab) and `/falsity summon` |
 | Bonding and petting | Yes — server-authoritative; held-use packet spam is suppressed |
 | Natural chat and sit/follow/come/stay orders | Yes — address Falsity by name; recent follow-ups retain player-isolated context |
-| Item requests | Yes — exact items plus food, armour, weapons, tools, mining, building, lighting, transport, farming, redstone and survival categories |
+| Item requests | Yes — several items and amounts in one sentence ("a crafting table and 64 sticks"), exact items plus food, armour, weapons, tools, mining, building, lighting, transport, farming, redstone and survival categories; unknown names are reported, never substituted |
+| Questions about the world | Yes — position, biome, dimension, time, weather, spawn, surroundings, nearest structure, nearby ores and caves, answered from the game itself, never guessed by the model |
 | Building | Yes — bounded plans, confirmation, materials, progressive placement, progress and cancellation |
-| Groq conversations (`/falsity talk`) | Yes — async, server-side, with deterministic action fallback, cooldowns and rate limits |
-| Offline fallback personality | Yes — Falsity always answers, even with no key or no network |
+| Groq conversations | Yes — async, server-side, remembers the last few exchanges; orders work without it; a message sent during the cooldown waits its turn instead of being dropped |
+| Groq diagnostics | Yes — `/falsity ai status` and `/falsity ai test` say whether Groq really answers and, if not, why and what to do |
+| Offline fallback personality | Yes — Falsity always answers, even with no key or no network, and answers what was said rather than repeating one line |
 | Persistent per-player memory | Yes — `falsity-memory/<uuid>.json`, isolated per player |
 | Evolving personality (9 traits) | Yes — persists per player, drifts with interactions |
 | Horror progression (Innocence → Strange) | Yes — architecture + staring + unsettling lines; capped, harmless |
@@ -67,8 +71,9 @@ mod, spawns Falsity, ticks it, bonds it to a player, exercises the sit/follow
 orders, measures it walking towards its owner, and verifies memory, personality,
 horror and offline conversations. If any of that fails, the build fails.
 
-At the time of writing that is 82 unit tests and 11 game tests (6 from the
-first milestone, 5 from this one).
+At the time of writing that is 482 unit tests and 35 game tests. Two of the unit
+tests talk to the real Groq service and only run when a key is supplied; without
+one they are reported as skipped, not as passed (see [docs/GROQ.md](docs/GROQ.md)).
 
 How the verification is reported, and what it does and does not prove, is
 described in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
@@ -89,7 +94,8 @@ In game, either
 Then:
 
 - **Chat naturally** — say `Falsity, come here`, `Falsity?`, `Falcity, follow me`, or continue a recent conversation without repeating its name. Replies are private to the addressing player; ordinary multiplayer chat is ignored.
-- **Request supplies** — for example `Falsity, give me food`, `I need a full set of armour`, `give me 64 torches`, or `give me diamond tools`. Item permissions and limits remain server-controlled.
+- **Request supplies** — for example `Falsity, give me food`, `I need a full set of armour`, `give me a crafting table and 64 sticks`, or `give me diamond tools`. Every item named is handed over in the amount asked for; a name Falsity does not know is said so while the rest still arrives. Who may ask, how many of one item (`items.maxPerRequest`), how many kinds at once (`items.maxTypesPerRequest`) and when a confirmation is asked for (`items.confirmAboveCount`) are server settings.
+- **Ask about the world** — `where am I?`, `what biome is this?`, `is it raining?`, `where is the nearest village?`, `any diamonds nearby?`. The answer comes from the game, with a direction, a distance and coordinates, not from the language model. Looking for structures, ores and caves follows `world.locatePermission` (the owner by default) and a short cooldown; ore and cave scans only read chunks that are already loaded. Coordinates are left out when `world.shareCoordinates` is off or the world's `reducedDebugInfo` game rule is on.
 - **Request a build** — for example `Falsity, build a small wooden house`. Falsity describes plans that require confirmation, validates the area and materials, places progressively, and accepts `stop building`.
 - **Give movement orders** — `come here`, `follow me`, `stay here`, `sit down`, `stand up`, and `stop following me` all work through normal chat.
 - **Right-click Falsity** — the first player to do so bonds with it.
@@ -97,6 +103,10 @@ Then:
 - **Right-click while bonded** — pet it; it heals slightly and plays its greeting.
 - **`/falsity talk <message>`** — talk to Falsity (must be within 16 blocks).
   Replies come from Groq when configured, otherwise from offline lines.
+- **`/falsity ai status`** and **`/falsity ai test`** (op) — whether Groq is
+  really answering, and if not, why.
+- **`/falsity reload`** (op) — apply an edited `config/falsity.json` without a
+  restart.
 - **`/falsity memory`** — see what Falsity remembers about you.
 - **`/falsity personality`** — see Falsity's personality towards you.
 - **`/falsity horror`** — see Falsity's current stage towards you.
@@ -109,19 +119,31 @@ Falsity will refer back to it.
 ## Groq setup (optional)
 
 Falsity talks through [Groq](https://console.groq.com)'s OpenAI-compatible
-API. It works without a key (offline lines), but with one it holds real
+API. It works without a key (offline lines, and orders, item requests and
+world questions are handled by the server itself), but with one it holds real
 conversations.
 
-1. Create a free API key at <https://console.groq.com>.
+1. Create a free API key at <https://console.groq.com/keys>.
 2. Put it in **one** of these places (first match wins):
    - the `GROQ_API_KEY` environment variable (recommended for servers), or
-   - `secrets.json` in the game directory — copy `docs/secrets.example.json`
-     and replace the placeholder (this file is git-ignored; never commit it), or
+   - a file named exactly `secrets.json` in the game directory or in `config/`
+     — copy `docs/secrets.example.json` and replace the placeholder (this file
+     is git-ignored; never commit it), or
    - the `groq.apiKey` field in `config/falsity.json` (ships empty; do not
      commit a real key).
-3. Optionally change `groq.model` in `config/falsity.json`. The default is
-   `openai/gpt-oss-20b`. Groq retires models without much notice: if replies
-   stop arriving, check the Groq console for the current model list.
+3. In game, run **`/falsity ai test`**. It sends one request and answers either
+   `Groq works. It answered "..."` or the reason it failed and what to do.
+   `/falsity ai status` shows where the key was found, the model, and the last
+   success and failure.
+4. Optionally change `groq.model` in `config/falsity.json`. The default is
+   `openai/gpt-oss-20b`. Groq retires models without much notice; when that
+   happens the test says `MODEL_UNAVAILABLE`.
+
+If Falsity only gives short scripted answers, Groq is not answering: every
+failed request is logged as a warning with its cause, and
+**[docs/GROQ.md](docs/GROQ.md)** lists each cause (no key found, key rejected,
+request refused, model gone, wrong address, rate limit, timeout, no network)
+with its fix.
 
 The key is only ever used server-side, as a `Bearer` header to Groq. It is
 never logged, never sent to clients, and never written back to disk.
@@ -161,6 +183,8 @@ game — it is QA tooling, not part of the mod.
 
 ## Documentation
 
+- [docs/INSTALL.md](docs/INSTALL.md) — building the jar and installing it
+- [docs/GROQ.md](docs/GROQ.md) — Groq setup, diagnostics and every failure with its fix
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the code is organised and why
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — environment setup, commands, tooling
 - [docs/ROADMAP.md](docs/ROADMAP.md) — milestones and what is deliberately not built yet

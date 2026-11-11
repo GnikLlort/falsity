@@ -73,7 +73,7 @@ public final class GroqClient {
 	private static final long QUICK_FAILURE_MILLIS = 2_000L;
 
 	/** How this mod names itself to the server it talks to. */
-	static final String USER_AGENT = "falsity-minecraft-mod (+https://github.com/GnikLlort/falsity)";
+	static final String USER_AGENT = "falsity-minecraft-mod (https://github.com/GnikLlort/falsity)";
 
 	/** The "error code: 1010" line a web firewall answers with when it turns a request away. */
 	private static final Pattern EDGE_ERROR_CODE = Pattern.compile("(?i)\\berror code:?\\s*(\\d{3,5})\\b");
@@ -956,7 +956,9 @@ public final class GroqClient {
 				.timeout(timeout)
 				.header("Content-Type", "application/json")
 				.header("Accept", "application/json")
-				// Java's stock client name is one that web firewalls like to turn away.
+				// A name of its own instead of Java's stock client name: generic
+				// client names are what a web firewall's default rules tend to turn
+				// away, and this one says who is calling.
 				.header("User-Agent", USER_AGENT)
 				.header("Authorization", "Bearer " + apiKey)
 				.POST(HttpRequest.BodyPublishers.ofString(jsonBody))

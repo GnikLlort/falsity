@@ -183,7 +183,7 @@ class GroqHttpTransportTest {
 		assertTrue(request.headers().get("content-type").startsWith("application/json"), request.headers().toString());
 		assertEquals(GroqClient.USER_AGENT, request.headers().get("user-agent"));
 		assertFalse(request.headers().get("user-agent").toLowerCase(Locale.ROOT).contains("java"),
-			"the stock Java client name is one that web firewalls turn away");
+			"the client says who it is instead of sending Java's stock client name");
 		assertFalse(request.headers().containsKey("upgrade"), "plain HTTP/1.1, no protocol upgrade: " + request.headers());
 
 		JsonObject body = GSON.fromJson(request.body(), JsonObject.class);

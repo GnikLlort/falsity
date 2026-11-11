@@ -284,6 +284,8 @@ public final class ConversationManager {
 			Turn turn = openTurn(player, falsity, cleaned, now, config);
 			turn.unknownItem = unknownItem;
 			deliverOffline(turn, config);
+			FalsityMod.debug("Turn {} for {}: answered offline ({}).", turn.id, player.getName().getString(),
+				config.groq.enabled ? "no Groq API key was found" : "Groq is disabled");
 			return Outcome.ACCEPTED;
 		}
 
@@ -483,6 +485,8 @@ public final class ConversationManager {
 			deliverOffline(turn, config);
 			return;
 		}
+
+		FalsityMod.debug("Turn {} for {}: answered by Groq. {}", turn.id, playerName, diagnostics.summary());
 
 		String dialogue = null;
 		ActionRequest action = null;

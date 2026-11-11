@@ -140,6 +140,46 @@ Delivered (on the `arena/10942be9-falsity` branch):
 Not in this milestone: sounds, networking spine, horror escalation,
 transformation, stalking, jumpscares.
 
+### 0.2.2 — making M3 dependable
+
+No new feature area: the same companion, made to do what it was already
+supposed to do. Each item below was a reported or found defect.
+
+- **Falsity repeated itself.** Offline lines ignored what the player said.
+  They now answer the kind of message (greeting, question, thanks, feeling) and
+  never repeat the previous line; with Groq, the last few exchanges are sent
+  along so replies stay on topic.
+- **Groq was silent and nobody could tell why.** Failures were swallowed and
+  the startup log claimed a connection it had never made. Every failed request
+  is now logged with its cause and the fix; `/falsity ai status` and
+  `/falsity ai test` report what is configured and what has actually been
+  observed. The request for reasoning models (`openai/gpt-oss-*`) reserves room
+  for thinking, which the old fixed `max_tokens` did not, and an empty reply is
+  retried with more room. Keys in the wrong place or shape are found or named.
+  A wrong `groq.endpoint`, a refusal on the way (403) and each kind of network
+  failure are told apart from a bad key. See [GROQ.md](GROQ.md).
+- **Messages were dropped during the cooldown.** They now wait their turn.
+  Orders, item requests and world questions never wait and never need Groq.
+- **Item requests collapsed to one item.** "A crafting table and 64 sticks"
+  delivers both, in the amounts asked for. Unknown names are reported, never
+  replaced; limits refuse the whole request and say which limit. A count the
+  model sent as a JSON number used to be read as 1.
+- **Words anywhere in a sentence triggered actions.** A command must start its
+  clause; plans, feelings, stories and idioms are conversation.
+- **Falsity could not say where anything is, or made it up.** Questions about
+  position, biome, time, weather, structures, ores and caves are answered by
+  the server from the world. The model is given those facts and no others, and
+  a reply that states coordinates it was not given is discarded. Coordinates
+  respect `world.shareCoordinates` and the `reducedDebugInfo` game rule.
+- **Settings that did nothing or said the wrong thing.** Old config files keep
+  their owner's choices while outdated defaults move forward (`configVersion`);
+  `autonomy.exploration` and `autonomy.resourceAssistance` now do what they say.
+
+Verification: 482 unit tests and 35 game tests in CI. Still unverified by any
+automated run: the real Groq service accepting the request, which needs a key
+(`GroqLiveTest` runs when one is provided and is reported as skipped
+otherwise), and anything visual.
+
 ---
 
 ## M3 — Presence and a networking spine
