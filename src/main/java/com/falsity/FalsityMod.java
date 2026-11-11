@@ -135,8 +135,8 @@ public class FalsityMod implements ModInitializer {
 		ServerTickEvents.END_SERVER_TICK.register(server -> expireIdleState());
 
 		LOGGER.info(
-			"Falsity ready ({} companions registered, debug logging {}). {}",
-			FalsityRegistries.FALSITY == null ? "no" : "one",
+			"Falsity ready (companion {}, debug logging {}). {}",
+			FalsityRegistries.FALSITY == null ? "not registered" : "registered",
 			config.debugLogging ? "on" : "off",
 			describeGroqSetup()
 		);

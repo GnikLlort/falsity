@@ -264,6 +264,43 @@ class AiStatusReportTest {
 		assertTrue(AiStatusReport.adviceFor(Failure.TIMEOUT).contains("groq.timeoutSeconds"));
 		assertTrue(AiStatusReport.adviceFor(Failure.INVALID_RESPONSE).contains("groq.reasoningHeadroomTokens"));
 		assertTrue(AiStatusReport.adviceFor(Failure.NETWORK_ERROR).contains("firewall"));
+		assertTrue(AiStatusReport.adviceFor(Failure.BAD_ENDPOINT).contains("groq.endpoint"));
+		assertTrue(AiStatusReport.adviceFor(Failure.BAD_ENDPOINT).contains(FalsityConfig.DEFAULT_GROQ_ENDPOINT));
+	}
+
+	@Test
+	void aRefusalIsNotAnsweredWithMakeANewKey() {
+		String advice = AiStatusReport.adviceFor(Failure.FORBIDDEN);
+		assertTrue(advice.contains("403"), advice);
+		assertTrue(advice.contains("model permissions"), advice);
+		assertTrue(advice.contains("VPN"), advice);
+		assertFalse(advice.contains("console.groq.com/keys"), "a new key does not get past a firewall: " + advice);
+
+		String refused = AiStatusReport.testResult(exchange(403, "error code: 1010"), null);
+		assertTrue(refused.contains("failure=FORBIDDEN"), refused);
+		assertTrue(refused.contains("turned away before reaching Groq (error code 1010)"), refused);
+		assertTrue(refused.contains(" -> " + advice), refused);
+	}
+
+	@Test
+	void aWrongAddressIsNamedAsTheThingToFix() {
+		String wrong = AiStatusReport.testResult(
+			exchange(404, error("unknown_url", "Unknown request URL: POST /openai/v1")), null);
+		assertTrue(wrong.contains("failure=BAD_ENDPOINT"), wrong);
+		assertTrue(wrong.contains("Unknown request URL"), wrong);
+		assertTrue(wrong.contains("groq.endpoint"), wrong);
+		assertFalse(wrong.contains("groq.model"), "the model is not the problem here: " + wrong);
+	}
+
+	@Test
+	void aChangedAddressIsShownAndTheDefaultIsNot() {
+		FalsityConfig config = new FalsityConfig();
+		String usual = String.join("\n", AiStatusReport.lines(config, FOUND, FRESH, 0, 0L));
+		assertFalse(usual.contains("Endpoint:"), usual);
+
+		config.groq.endpoint = "http://localhost:8080/v1/chat/completions";
+		List<String> changed = AiStatusReport.lines(config, FOUND, FRESH, 0, 0L);
+		assertTrue(changed.contains("Endpoint: http://localhost:8080/v1/chat/completions (not the default)"), changed.toString());
 	}
 
 	@Test

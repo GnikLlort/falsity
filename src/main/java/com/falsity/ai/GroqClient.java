@@ -4,7 +4,9 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import java.io.IOException;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -19,6 +21,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,6 +46,10 @@ import org.slf4j.LoggerFactory;
  * reply, so for those models the request reserves extra headroom, asks for low
  * reasoning effort and leaves the reasoning text out of the response.
  *
+ * <p>A connection that is dropped before any reply arrives is tried once more,
+ * because that is what a stale pooled connection looks like; timeouts and HTTP
+ * errors are never repeated.
+ *
  * <p>The HTTP layer is behind a {@link Transport} interface so unit tests
  * can stub responses without a network or a real API key.
  */
@@ -59,6 +66,18 @@ public final class GroqClient {
 	/** Largest completion budget an automatic retry may ask for. */
 	private static final int MAX_RETRY_COMPLETION_TOKENS = 4096;
 
+	/** How far down a chain of causes the client looks; guards against a cycle. */
+	private static final int MAX_CAUSE_DEPTH = 12;
+
+	/** A network failure that arrives this fast is worth one immediate second try. */
+	private static final long QUICK_FAILURE_MILLIS = 2_000L;
+
+	/** How this mod names itself to the server it talks to. */
+	static final String USER_AGENT = "falsity-minecraft-mod (+https://github.com/GnikLlort/falsity)";
+
+	/** The "error code: 1010" line a web firewall answers with when it turns a request away. */
+	private static final Pattern EDGE_ERROR_CODE = Pattern.compile("(?i)\\berror code:?\\s*(\\d{3,5})\\b");
+
 	/** Why a request failed. Callers only need to know "use the fallback". */
 	public enum Failure {
 		DISABLED,
@@ -68,10 +87,17 @@ public final class GroqClient {
 		HTTP_ERROR,
 		INVALID_RESPONSE,
 		NETWORK_ERROR,
-		/** Groq rejected the API key (HTTP 401 or 403). */
+		/** Groq rejected the API key (HTTP 401), or the key cannot be sent at all. */
 		UNAUTHORIZED,
 		/** The configured model does not exist or has been retired. */
-		MODEL_UNAVAILABLE
+		MODEL_UNAVAILABLE,
+		/**
+		 * The request was refused (HTTP 403): by Groq because the key may not do
+		 * this, or by something in front of Groq before the key was even looked at.
+		 */
+		FORBIDDEN,
+		/** {@code groq.endpoint} is not a chat-completions address. */
+		BAD_ENDPOINT
 	}
 
 	/** Outcome of one chat-completion request. */
@@ -332,6 +358,11 @@ public final class GroqClient {
 				"the API key contains a space, a line break or another character a key cannot have; paste it again",
 				0L, null)));
 		}
+		String endpointProblem = endpointProblem(request.endpoint());
+		if (!endpointProblem.isEmpty()) {
+			return CompletableFuture.completedFuture(finish(failed(
+				requestId, model, startNanos, 0, 0, Failure.BAD_ENDPOINT, endpointProblem, 0L, null)));
+		}
 		if (!this.rateLimiter.tryAcquire(request.maxRequestsPerMinute())) {
 			String detail = "local limit of " + Math.max(1, request.maxRequestsPerMinute())
 				+ " requests per minute reached (conversation.maxRequestsPerMinute)";
@@ -348,9 +379,9 @@ public final class GroqClient {
 			? request.maxTokens() + request.reasoningHeadroomTokens()
 			: request.maxTokens();
 
-		return attempt(request, requestId, startNanos, 1, reasoning, completionTokens, false, false)
+		return attempt(request, requestId, startNanos, 1, reasoning, completionTokens, false, false, false)
 			.exceptionally(error -> failed(
-				requestId, model, startNanos, 0, 1, classify(error), describeError(error), 0L, null))
+				requestId, model, startNanos, 0, 1, classify(error), describeError(error, request), 0L, null))
 			.thenApply(this::finish);
 	}
 
@@ -362,7 +393,8 @@ public final class GroqClient {
 		boolean reasoning,
 		int completionTokens,
 		boolean budgetRetried,
-		boolean reasoningRejected
+		boolean reasoningRejected,
+		boolean networkRetried
 	) {
 		String model = request.model() == null ? "" : request.model();
 		String body = reasoning
@@ -370,9 +402,10 @@ public final class GroqClient {
 			: buildRequestJson(model, request.messages(), request.temperature(), completionTokens);
 		Duration timeout = Duration.ofSeconds(Math.max(1, request.timeoutSeconds()));
 
+		long attemptStartNanos = System.nanoTime();
 		CompletableFuture<HttpResult> sent;
 		try {
-			sent = this.transport.send(request.endpoint(), request.apiKey(), body, timeout);
+			sent = this.transport.send(request.endpoint().trim(), request.apiKey(), body, timeout);
 		} catch (RuntimeException exception) {
 			sent = CompletableFuture.failedFuture(exception);
 		}
@@ -382,8 +415,19 @@ public final class GroqClient {
 
 		return sent.handle((httpResult, error) -> {
 			if (error != null) {
+				Failure failure = classify(error);
+				if (failure == Failure.NETWORK_ERROR && !networkRetried && connectionFailed(error)
+					&& elapsedMillis(attemptStartNanos) < QUICK_FAILURE_MILLIS) {
+					// A connection that fails at once is usually a stale one from the
+					// pool, and the second try opens a fresh one. Slow failures are not
+					// repeated: the player has waited long enough already.
+					LOGGER.debug("Groq request {} lost its connection ({}); trying once more.",
+						requestId, describeError(error, request));
+					return attempt(request, requestId, startNanos, attemptNumber + 1, reasoning, completionTokens,
+						budgetRetried, reasoningRejected, true);
+				}
 				return CompletableFuture.completedFuture(failed(
-					requestId, model, startNanos, 0, attemptNumber, classify(error), describeError(error), 0L, null));
+					requestId, model, startNanos, 0, attemptNumber, failure, describeError(error, request), 0L, null));
 			}
 			if (httpResult == null) {
 				return CompletableFuture.completedFuture(failed(
@@ -397,12 +441,13 @@ public final class GroqClient {
 				LOGGER.info(
 					"Groq rejected a request with reasoning settings for model {} ({}); retrying without them.",
 					model, errorDetail(httpResult.body()));
-				return attempt(request, requestId, startNanos, attemptNumber + 1, false, completionTokens, budgetRetried, true);
+				return attempt(request, requestId, startNanos, attemptNumber + 1, false, completionTokens, budgetRetried, true,
+					networkRetried);
 			}
 			if (status < 200 || status >= 300) {
 				return CompletableFuture.completedFuture(failed(
 					requestId, model, startNanos, status, attemptNumber, classifyStatus(status, httpResult.body()),
-					errorDetail(httpResult.body()), retryAfterMillis(httpResult), null));
+					statusDetail(httpResult), retryAfterMillis(httpResult), null));
 			}
 
 			if (reasoningRejected) {
@@ -419,7 +464,8 @@ public final class GroqClient {
 					LOGGER.info(
 						"Groq model {} used all {} completion tokens without producing a reply; retrying once with {}.",
 						model, completionTokens, larger);
-					return attempt(request, requestId, startNanos, attemptNumber + 1, reasoning, larger, true, false);
+					return attempt(request, requestId, startNanos, attemptNumber + 1, reasoning, larger, true, false,
+						networkRetried);
 				}
 				String detail;
 				if (!parsed.hasChoices()) {
@@ -503,40 +549,173 @@ public final class GroqClient {
 		if (status == 429) {
 			return Failure.RATE_LIMITED;
 		}
-		if (status == 401 || status == 403) {
+		if (status == 401) {
 			return Failure.UNAUTHORIZED;
 		}
+		if (status == 403) {
+			return Failure.FORBIDDEN;
+		}
 		String code = errorField(body, "code").toLowerCase(Locale.ROOT);
-		if (status == 404 || code.contains("model_not_found") || code.contains("model_decommissioned")) {
+		if (code.contains("model_not_found") || code.contains("model_decommissioned")) {
 			return Failure.MODEL_UNAVAILABLE;
+		}
+		if (status == 404) {
+			// Groq answers 404 for a model it does not know and for an address it
+			// does not know. Only the first is about groq.model.
+			String message = errorField(body, "message").toLowerCase(Locale.ROOT);
+			return code.contains("model") || message.contains("model") ? Failure.MODEL_UNAVAILABLE : Failure.BAD_ENDPOINT;
+		}
+		if ((status >= 300 && status < 400) || status == 405) {
+			return Failure.BAD_ENDPOINT;
 		}
 		return Failure.HTTP_ERROR;
 	}
 
-	private static Failure classify(Throwable error) {
-		Throwable cause = rootCause(error);
-		String name = cause.getClass().getSimpleName();
-		if (name.contains("Timeout") || name.contains("ConnectException")) {
-			// A connect failure is also a timeout for practical purposes:
-			// the player gets the offline line either way.
-			return name.contains("Timeout") ? Failure.TIMEOUT : Failure.NETWORK_ERROR;
+	/**
+	 * What an error response says, in a form that is safe to log: Groq's own
+	 * code and message when the body is Groq's error JSON, otherwise only what
+	 * can be said without quoting the body.
+	 */
+	private static String statusDetail(HttpResult httpResult) {
+		String detail = errorDetail(httpResult.body());
+		if (!detail.isEmpty()) {
+			return detail;
 		}
-		return Failure.NETWORK_ERROR;
+		int status = httpResult.statusCode();
+		if (status >= 300 && status < 400) {
+			String target = hostOf(httpResult.header("location"));
+			return "the address answered with a redirect" + (target.isEmpty() ? "" : " to " + target);
+		}
+		return blockedDetail(httpResult.body());
+	}
+
+	/**
+	 * Recognises the page a web firewall sends when it turns a request away
+	 * before Groq sees it. Only a fixed phrase and the numeric code are kept.
+	 */
+	static String blockedDetail(String body) {
+		if (body == null || body.isBlank()) {
+			return "";
+		}
+		String head = body.length() > 4096 ? body.substring(0, 4096) : body;
+		boolean cloudflare = head.toLowerCase(Locale.ROOT).contains("cloudflare");
+		Matcher code = EDGE_ERROR_CODE.matcher(head);
+		if (code.find()) {
+			return "turned away before reaching Groq (" + (cloudflare ? "Cloudflare " : "") + "error code " + code.group(1) + ")";
+		}
+		return cloudflare ? "turned away before reaching Groq (Cloudflare page)" : "";
+	}
+
+	/** Why {@code endpoint} cannot be used as written, or an empty string when it can. */
+	static String endpointProblem(String endpoint) {
+		if (endpoint == null || endpoint.isBlank()) {
+			return "groq.endpoint is empty";
+		}
+		URI uri;
+		try {
+			uri = new URI(endpoint.trim());
+		} catch (URISyntaxException malformed) {
+			return "groq.endpoint is not a valid address";
+		}
+		String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
+		if (!scheme.equals("https") && !scheme.equals("http")) {
+			return "groq.endpoint must start with https://";
+		}
+		if (uri.getHost() == null || uri.getHost().isBlank()) {
+			return "groq.endpoint has no host name";
+		}
+		return "";
+	}
+
+	/** The host (and port, when one is written) of an address, or an empty string. */
+	static String hostOf(String address) {
+		if (address == null || address.isBlank()) {
+			return "";
+		}
+		try {
+			URI uri = new URI(address.trim());
+			if (uri.getHost() == null || uri.getHost().isBlank()) {
+				return "";
+			}
+			return uri.getPort() < 0 ? uri.getHost() : uri.getHost() + ":" + uri.getPort();
+		} catch (URISyntaxException malformed) {
+			return "";
+		}
+	}
+
+	private static Failure classify(Throwable error) {
+		if (inChain(error, "HttpConnectTimeoutException")) {
+			// Nothing answered at all. That is a reachability problem, not a slow
+			// model, and raising groq.timeoutSeconds would not help.
+			return Failure.NETWORK_ERROR;
+		}
+		return inChain(error, "Timeout") ? Failure.TIMEOUT : Failure.NETWORK_ERROR;
+	}
+
+	/** Whether the failure came from the connection itself rather than from a programming error. */
+	private static boolean connectionFailed(Throwable error) {
+		Throwable cause = error;
+		for (int depth = 0; cause != null && depth < MAX_CAUSE_DEPTH; depth++) {
+			if (cause instanceof IOException) {
+				return true;
+			}
+			cause = cause.getCause() == cause ? null : cause.getCause();
+		}
+		return false;
+	}
+
+	/** Whether any exception in the cause chain has {@code namePart} in its class name. */
+	private static boolean inChain(Throwable error, String namePart) {
+		Throwable cause = error;
+		for (int depth = 0; cause != null && depth < MAX_CAUSE_DEPTH; depth++) {
+			if (cause.getClass().getSimpleName().contains(namePart)) {
+				return true;
+			}
+			cause = cause.getCause() == cause ? null : cause.getCause();
+		}
+		return false;
 	}
 
 	private static Throwable rootCause(Throwable error) {
 		Throwable cause = error;
-		while (cause.getCause() != null && cause.getCause() != cause) {
+		for (int depth = 0; depth < MAX_CAUSE_DEPTH && cause.getCause() != null && cause.getCause() != cause; depth++) {
 			cause = cause.getCause();
 		}
 		return cause;
 	}
 
-	/** The exception class and message, redacted and shortened for the log. */
-	private static String describeError(Throwable error) {
+	/**
+	 * A network failure in plain words, redacted and shortened for the log.
+	 * The common ones are named for what they mean ("cannot find the host",
+	 * "connection refused"); anything else keeps its exception class and message.
+	 */
+	private static String describeError(Throwable error, Request request) {
+		String host = hostOf(request.endpoint());
+		String where = host.isEmpty() ? "the endpoint" : host;
+		if (inChain(error, "UnresolvedAddress") || inChain(error, "UnknownHost")) {
+			return "cannot find " + where + " (the host name could not be looked up)";
+		}
+		if (inChain(error, "HttpConnectTimeoutException")) {
+			return "could not connect to " + where + " in time";
+		}
+		if (inChain(error, "Timeout")) {
+			return "no answer from " + where + " within " + Math.max(1, request.timeoutSeconds()) + " s";
+		}
+
 		Throwable cause = rootCause(error);
 		String message = cause.getMessage();
 		String text = cause.getClass().getSimpleName() + (message == null || message.isBlank() ? "" : ": " + message);
+		if (inChain(error, "SSL") || inChain(error, "Certificate") || inChain(error, "CertPath")) {
+			return sanitiseDetail("secure connection to " + where + " failed (" + text + ")");
+		}
+		if (inChain(error, "ConnectException")) {
+			return message == null || message.isBlank()
+				? "connection to " + where + " refused"
+				: sanitiseDetail("could not connect to " + where + " (" + message + ")");
+		}
+		if (inChain(error, "EOFException") || inChain(error, "ClosedChannel")) {
+			return "connection to " + where + " closed before a reply arrived";
+		}
 		return sanitiseDetail(text);
 	}
 
@@ -645,7 +824,7 @@ public final class GroqClient {
 							finishReason = string(choice.get("finish_reason"));
 							JsonObject message = object(choice.get("message"));
 							if (message != null) {
-								content = string(message.get("content")).trim();
+								content = contentText(message.get("content")).trim();
 							}
 						}
 					}
@@ -727,6 +906,22 @@ public final class GroqClient {
 		return element != null && element.isJsonObject() ? element.getAsJsonObject() : null;
 	}
 
+	/**
+	 * The reply text. Groq sends a plain string; some OpenAI-compatible servers
+	 * send a list of parts instead, whose text parts are joined here.
+	 */
+	private static String contentText(JsonElement element) {
+		if (element == null || !element.isJsonArray()) {
+			return string(element);
+		}
+		StringBuilder builder = new StringBuilder();
+		for (JsonElement part : element.getAsJsonArray()) {
+			JsonObject partObject = object(part);
+			builder.append(partObject == null ? string(part) : string(partObject.get("text")));
+		}
+		return builder.toString();
+	}
+
 	private static String string(JsonElement element) {
 		if (element == null || element.isJsonNull() || !element.isJsonPrimitive()) {
 			return "";
@@ -747,7 +942,11 @@ public final class GroqClient {
 	}
 
 	private static Transport defaultTransport() {
+		// HTTP/1.1 on purpose: one small request at a time gains nothing from
+		// HTTP/2, and proxies and HTTPS-scanning security software handle the
+		// older protocol more reliably.
 		HttpClient client = HttpClient.newBuilder()
+			.version(HttpClient.Version.HTTP_1_1)
 			.connectTimeout(Duration.ofSeconds(10))
 			.build();
 
@@ -756,6 +955,9 @@ public final class GroqClient {
 				.uri(URI.create(url))
 				.timeout(timeout)
 				.header("Content-Type", "application/json")
+				.header("Accept", "application/json")
+				// Java's stock client name is one that web firewalls like to turn away.
+				.header("User-Agent", USER_AGENT)
 				.header("Authorization", "Bearer " + apiKey)
 				.POST(HttpRequest.BodyPublishers.ofString(jsonBody))
 				.build();
@@ -763,8 +965,9 @@ public final class GroqClient {
 			return client.sendAsync(request, HttpResponse.BodyHandlers.ofString())
 				.thenApply(response -> {
 					Map<String, String> headers = new HashMap<>();
-					response.headers().firstValue("retry-after").ifPresent(value -> headers.put("retry-after", value));
-					response.headers().firstValue("x-request-id").ifPresent(value -> headers.put("x-request-id", value));
+					for (String name : new String[] {"retry-after", "x-request-id", "location"}) {
+						response.headers().firstValue(name).ifPresent(value -> headers.put(name, value));
+					}
 					return new HttpResult(response.statusCode(), response.body(), headers);
 				})
 				.exceptionally(error -> {

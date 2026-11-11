@@ -205,7 +205,7 @@ class GroqClientDiagnosticsTest {
 	@Test
 	void aRejectedKeyAndAMissingModelAreNamed() {
 		assertEquals(Failure.UNAUTHORIZED, failureFor(401, error("invalid_api_key", "Invalid API Key")));
-		assertEquals(Failure.UNAUTHORIZED, failureFor(403, "{}"));
+		assertEquals(Failure.FORBIDDEN, failureFor(403, "{}"), "a refusal is not necessarily about the key");
 		assertEquals(Failure.MODEL_UNAVAILABLE, failureFor(404, error("model_not_found", "The model does not exist")));
 		assertEquals(Failure.MODEL_UNAVAILABLE, failureFor(400, error("model_decommissioned", "The model has been decommissioned")));
 		assertEquals(Failure.RATE_LIMITED, failureFor(429, "{}"));

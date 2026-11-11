@@ -31,6 +31,11 @@ public final class AiStatusReport {
 		lines.add("Model: " + config.groq.model + " (max tokens " + config.groq.maxTokens
 			+ reasoningNote(config) + ", timeout " + config.groq.timeoutSeconds + " s, history "
 			+ config.groq.historyTurns + " turns)");
+		if (!FalsityConfig.DEFAULT_GROQ_ENDPOINT.equals(config.groq.endpoint)) {
+			// Only worth a line when it was changed: a wrong address is a common
+			// reason for Groq "not answering".
+			lines.add("Endpoint: " + config.groq.endpoint + " (not the default)");
+		}
 		lines.add(keyLine(key));
 		lines.add("Pacing: cooldown " + config.conversation.cooldownSeconds + " s, at most "
 			+ config.conversation.maxRequestsPerMinute + " requests a minute, " + waitingMessages + " waiting");
@@ -112,6 +117,11 @@ public final class AiStatusReport {
 			case NETWORK_ERROR -> "The server could not reach Groq: check the network, proxy or firewall.";
 			case INVALID_RESPONSE -> "The reply was empty or malformed: try raising groq.maxTokens or groq.reasoningHeadroomTokens.";
 			case HTTP_ERROR -> "Groq returned an error status; the detail above is Groq's own message.";
+			case FORBIDDEN -> "The request was refused (403). Either the key may not use this model (check the "
+				+ "project's model permissions at console.groq.com), or something between this server and Groq "
+				+ "turned it away: a VPN, proxy, firewall or a blocked region. A new key will not fix the second kind.";
+			case BAD_ENDPOINT -> "groq.endpoint is not a chat-completions address. The default is "
+				+ FalsityConfig.DEFAULT_GROQ_ENDPOINT + ".";
 			case NO_KEY -> "No API key is configured.";
 			case DISABLED -> "Groq is disabled in the config.";
 		};

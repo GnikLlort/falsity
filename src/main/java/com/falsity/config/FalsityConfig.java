@@ -33,6 +33,11 @@ import java.util.Optional;
  * pure, and only {@link #load(Path)} and {@link #save(Path)} touch disk.
  */
 public final class FalsityConfig {
+	/** Groq's OpenAI-compatible chat-completions address. */
+	public static final String DEFAULT_GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
+
+	private static final String GROQ_HOST = "api.groq.com";
+
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
 	/** The settings format written by this version of the mod. */
@@ -93,8 +98,12 @@ public final class FalsityConfig {
 		public String apiKey = "";
 		/** Groq model id, e.g. {@code openai/gpt-oss-20b}. */
 		public String model = "openai/gpt-oss-20b";
-		/** Chat-completions endpoint. */
-		public String endpoint = "https://api.groq.com/openai/v1/chat/completions";
+		/**
+		 * Chat-completions endpoint. A base address such as
+		 * {@code https://api.groq.com/openai/v1} is completed on load; see
+		 * {@link FalsityConfig#normaliseEndpoint}.
+		 */
+		public String endpoint = DEFAULT_GROQ_ENDPOINT;
 		/** Seconds to wait for a Groq reply before falling back offline. */
 		public int timeoutSeconds = 15;
 		/** Maximum tokens in a single reply. */
@@ -471,6 +480,56 @@ public final class FalsityConfig {
 	}
 
 	/**
+	 * Turns the common ways of writing the Groq address into the one that
+	 * works. The usual slip is to paste the "base URL" that OpenAI-style tools
+	 * ask for ({@code https://api.groq.com/openai/v1}), which Groq answers with
+	 * a 404; others are a missing {@code https://}, plain {@code http://} for
+	 * Groq (which would send the key unencrypted and only earn a redirect) and
+	 * a trailing slash.
+	 *
+	 * <p>Addresses of other servers are left alone apart from the scheme, the
+	 * trailing slash and a path that stops at {@code /v1}. An address with a
+	 * query string is only trimmed.
+	 */
+	public static String normaliseEndpoint(String endpoint) {
+		if (endpoint == null || endpoint.isBlank()) {
+			return DEFAULT_GROQ_ENDPOINT;
+		}
+		String address = endpoint.trim();
+		if (address.indexOf('?') >= 0 || address.indexOf('#') >= 0) {
+			return address;
+		}
+		if (!address.matches("(?i)^[a-z][a-z0-9+.\\-]*://.*")) {
+			address = "https://" + address;
+		}
+		while (address.endsWith("/") && !address.endsWith("://")) {
+			address = address.substring(0, address.length() - 1);
+		}
+
+		String lower = address.toLowerCase(Locale.ROOT);
+		int hostStart = lower.indexOf("://") + 3;
+		int pathStart = lower.indexOf('/', hostStart);
+		String host = pathStart < 0 ? lower.substring(hostStart) : lower.substring(hostStart, pathStart);
+		String path = pathStart < 0 ? "" : lower.substring(pathStart);
+
+		if (host.equals(GROQ_HOST)) {
+			if (path.isEmpty() || path.equals("/openai") || path.equals("/openai/v1")
+				|| path.equals("/v1") || path.equals("/openai/v1/chat") || path.equals("/chat/completions")
+				|| path.equals("/v1/chat/completions")) {
+				return DEFAULT_GROQ_ENDPOINT;
+			}
+			if (lower.startsWith("http://")) {
+				return "https://" + address.substring("http://".length());
+			}
+			return address;
+		}
+		if (path.endsWith("/v1")) {
+			return address + "/chat/completions";
+		}
+		return address;
+	}
+
+	/**
 	 * Brings every value into a range the game can actually use. Called on load
 	 * and after any programmatic edit, so a hand-edited file cannot make Falsity
 	 * teleport every tick or walk at a thousand blocks a second.
@@ -486,9 +545,7 @@ public final class FalsityConfig {
 		if (groq.model == null || groq.model.isBlank()) {
 			groq.model = "openai/gpt-oss-20b";
 		}
-		if (groq.endpoint == null || groq.endpoint.isBlank()) {
-			groq.endpoint = "https://api.groq.com/openai/v1/chat/completions";
-		}
+		groq.endpoint = normaliseEndpoint(groq.endpoint);
 		groq.timeoutSeconds = clampInt(groq.timeoutSeconds, 2, 60);
 		groq.maxTokens = clampInt(groq.maxTokens, 16, 1024);
 		groq.temperature = clamp(groq.temperature, 0.0, 2.0);
