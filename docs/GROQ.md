@@ -122,11 +122,13 @@ start Java with its usual proxy options (`-Dhttps.proxyHost=... -Dhttps.proxyPor
 Only conversation goes to Groq. "Follow me", "give me 16 torches" and "where is
 the nearest village?" are answered by the server at once and cost nothing.
 
-A conversation message sends the system prompt (who Falsity is, its mood, the
-memories relevant to the message, facts the game has just verified, the rules),
-up to `groq.historyTurns` earlier exchanges, and the message itself: roughly
-400 to 650 tokens of prompt for the first message, more as the conversation
-goes on. The answer is budgeted at `groq.maxTokens` (150). The default model,
+A conversation message sends the system prompt (the rules, the personality
+text, the horror stage's voice, where Falsity and the player stand, the
+memories relevant to the message, facts the game has just verified), up to
+`groq.historyTurns` earlier exchanges, and the message itself. The system
+prompt is about 4,000 characters, roughly 1,000 tokens, and never more than
+5,600 characters; before 0.3.0 it was about half that. The conversation so far
+adds up to 1,200 characters. The answer is budgeted at `groq.maxTokens` (150). The default model,
 `openai/gpt-oss-20b`, is a reasoning model: it thinks before it answers and
 the thinking counts against the same budget, so for such a model the request
 allows `groq.maxTokens` plus `groq.reasoningHeadroomTokens` (150 + 512) for
@@ -135,8 +137,17 @@ far less than the allowance. `/falsity ai status` shows the real numbers of
 the last request as `tokens=prompt+completion=total`.
 
 Groq's free tier limits requests and tokens per minute and per day, per
-model. If `RATE_LIMITED` shows up in normal play, lower `groq.historyTurns` or
+model. If `RATE_LIMITED` shows up in normal play, shorten
+`config/falsity/personality.txt`, lower `groq.historyTurns` or
 `groq.reasoningHeadroomTokens`, or choose a model with a larger allowance.
+
+One kind of request is not started by the player: with `chat.speaksFirst` on
+(the default), Falsity occasionally says something of its own when its owner is
+close and nobody has been talking. That is one ordinary request each time, at
+most once every `chat.speaksFirstMinutes` per player, and it stops after two
+remarks in a row that the player does nothing about. It never uses the second
+half of `conversation.maxRequestsPerMinute`, so it cannot crowd out a
+conversation. Set `chat.speaksFirst` to `false` to have no such requests.
 
 ## 6. Settings
 
@@ -157,6 +168,11 @@ In `config/falsity.json` (every value is clamped to a safe range on load):
 | `conversation.cooldownSeconds` | `3` (0 to 300) | Minimum time between two Groq requests of one player. A message sent sooner waits its turn and is answered next; it is not dropped. |
 | `conversation.maxRequestsPerMinute` | `10` (1 to 30) | Server-wide ceiling on Groq requests. |
 | `conversation.maxMessageLength` | `256` (16 to 1024) | Longer messages are refused with a note. |
+| `chat.speaksFirst` | `true` | Whether Falsity may say something without being spoken to. Each remark is one request. |
+| `chat.speaksFirstMinutes` | `10` (2 to 240) | Least minutes between two such remarks to one player. |
+
+What is in the system prompt, and how to change who Falsity is, is described in
+[PERSONALITY.md](PERSONALITY.md).
 
 ## 7. What the client does on its own
 
@@ -180,7 +196,9 @@ In `config/falsity.json` (every value is clamped to a safe range on load):
   real timeout, a refused connection, a redirect and a dropped connection.
 - `FalsityGroqPipelineGameTest` runs whole conversations on a real Minecraft
   server (chat message in, prompt, reply, action, memory) with only the network
-  replaced.
+  replaced. `FalsityPersonalityGameTest` and `FalsitySpeaksFirstGameTest` do the
+  same for the personality file, the horror voices and unprompted remarks, and
+  `PersonalitySystemTest` does it without a game, over real files.
 - `GroqLiveTest` asks the real Groq service with the default settings. It needs
   a key, so it only runs when `GROQ_API_KEY` is set, and is reported as
   **skipped** otherwise:

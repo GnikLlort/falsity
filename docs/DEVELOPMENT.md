@@ -143,6 +143,25 @@ Rules for adding settings:
    does nothing is a lie in a config file.
 2. Clamp it in `sanitise()` and cover the clamp with a unit test.
 3. Never put secrets in this file. See below.
+4. When a setting is added, raise `FalsityConfig.CURRENT_VERSION` so existing
+   files are rewritten with it, and regenerate `docs/falsity.example.json`
+   (a test compares that file with the defaults).
+
+### The personality file
+
+Who Falsity is lives in a second file, `config/falsity/personality.txt`, read
+by `PersonalityPromptStore`. It is plain text because prose in JSON is
+miserable to edit. The default text ships as a resource,
+`src/main/resources/falsity/personality.default.txt`; that file is both what is
+written out on first start and what is used when the owner's file is unusable.
+Edit the default there, not in Java. [PERSONALITY.md](PERSONALITY.md) is the
+user-facing description.
+
+The prompt text that is not the owner's to change is in three places, each with
+tests that pin what it must and must not say: the rules in `PromptBuilder`, the
+horror voices in `StageDirections`, and the wording of the relationship in
+`RelationshipState`. None of them contains a line for Falsity to recite, and
+`NoCannedDialogueTest` keeps it that way.
 
 ## Secrets and Groq setup
 
@@ -188,11 +207,17 @@ Then try it for real:
    chat. A reply should arrive within a few seconds, prefixed with `<Falsity>`.
 2. Say `remember my favourite block is diamonds`, then talk again about
    diamonds: Falsity should refer back to it.
-3. Run `/falsity memory` and `/falsity personality` to inspect what it kept.
+3. Run `/falsity memory` and `/falsity personality` to inspect what it kept,
+   which personality text is in use and which voice the horror stage gives it.
+4. Open `config/falsity/personality.txt`, change a sentence, save, and talk
+   again: the reply should follow the new text. `/falsity personality reload`
+   reports what was loaded.
 
 Setting `debugLogging` to `true` in the config logs at INFO how each message
 was dealt with: handled locally as an order, queued, answered offline (and
 why), or answered by Groq, with that request's status, timing and token usage.
+For a Groq turn it also logs the size of each layer of the prompt, which
+personality is in use and which voice; never any of the text.
 Failures are logged at WARN whether or not it is on.
 
 **Testing offline fallback:** set `groq.enabled` to `false` in
@@ -208,6 +233,17 @@ the wire, a real timeout, a refused connection and a dropped connection are
 covered too. `FalsityGroqPipelineGameTest` scripts the network inside a real
 Minecraft server and follows a chat message all the way to the reply, the
 action and the memory.
+
+**Testing the personality system** needs no key either. `PersonalitySystemTest`
+builds everything the mod builds at start-up (the personality file, the memory,
+personality and horror managers over real files, the prompt, the Groq client)
+and records what would have been sent. It is where "the personality reaches
+Groq", "every stage sends its own voice", "changing the personality does not
+reset horror progress" and "a restart changes nothing" are proved.
+`FalsityPersonalityGameTest` and `FalsitySpeaksFirstGameTest` repeat the
+essentials on a real server. To hear a later stage's voice by hand, note that
+`/falsity horror set` only holds until the player's next interaction unless
+tension has reached that stage, and that the settings cap the stage at 1.
 
 ## How CI verifies the mod
 
@@ -350,9 +386,24 @@ and they are what the code relies on:
   memory follows them between worlds. On a dedicated server (one world per
   install) this is equivalent to per-world.
 - Fact extraction is simple pattern matching (`my name is...`, `i like...`,
-  `remember...`). It is not NLP and will miss phrasings it does not know.
-- Horror is capped at Strange: staring and odd recollections only. The
-  director, stalking and transformation are later milestones.
+  `i'm building...`, `my base is...`, `remember...`; see `FactExtractor`). It
+  is not NLP and will miss phrasings it does not know.
+- Horror is capped at Strange: staring, odd recollections and the "unusual"
+  voice only. The voices for the three later stages exist and are tested, but
+  nothing can reach them until the cap is raised. The director, stalking and
+  transformation are later milestones.
+- How a model follows the personality and the stage directions has not been
+  checked against the real Groq service. The tests prove what is sent, not how
+  it is answered.
+- The personality file shapes what Groq says. The offline lines were written in
+  advance, in the default personality's voice, and a custom personality cannot
+  change them.
+- "How the player treats Falsity" means words, pets and absences. Hitting it is
+  not noticed.
+- Speaking first needs Groq. Offline, Falsity only ever answers.
+- The prompt is about twice the size it was before 0.3.0 (roughly 1,000 tokens
+  of system text per message). On a metered or free Groq plan that halves how
+  far the same allowance goes.
 - Item assistance resolves vanilla `minecraft:` ids only; modded items are not
   looked up. The name is normalised (plural/synonym/case) but a modded item id
   will not resolve.

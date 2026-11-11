@@ -180,6 +180,46 @@ automated run: the real Groq service accepting the request, which needs a key
 (`GroqLiveTest` runs when one is provided and is reported as skipped
 otherwise), and anything visual.
 
+### 0.3.0 — a personality of its own
+
+Falsity gets a personality that can be read, edited and reloaded, and the
+horror progression gets a voice. See [PERSONALITY.md](PERSONALITY.md).
+
+- **A personality file.** `config/falsity/personality.txt` is created with a
+  default and sent with every conversation. Saving it is enough for the next
+  reply to use it; `/falsity personality reload` and `/falsity reload` do it on
+  demand. A missing, empty or unreadable file falls back to the built-in
+  default and is left untouched.
+- **A layered prompt.** Rules, personality, horror stage, relationship, memory,
+  world, then the conversation and the message, each layer with its own bound
+  so none crowds out another.
+- **A voice for every horror stage.** The stage still comes from the horror
+  system alone. Each of its five stages now has directions for how the
+  personality shows, written as a change to the expression and never as a new
+  character. `horror.allowUnsettlingLines`, which nothing read, now keeps the
+  voice at the first stage when off. The cap stays at Strange; the three later
+  voices wait for M4 to raise it.
+- **Falsity knows where it stands with you.** How long you have known each
+  other, how often you have talked and petted, how it feels, how long you were
+  away and whether your recent words were kind or harsh are all told to the
+  model, and all read off what is counted. A return after days away used to go
+  unnoticed unless the first thing you did was pet it.
+- **It remembers more of what you tell it about yourself**, picks up where the
+  last conversation left off after a restart, and is told when you are hurt or
+  hostile mobs are close.
+- **It can speak first**, rarely, to its owner, with Groq only. This ends the
+  rule from M2 that Falsity only speaks when spoken to; `chat.speaksFirst`
+  restores it.
+- **Fewer remarks taken for questions.** "I like this time of day" and "let me
+  look around" are conversation, and a follow-up that calls another player by
+  name is left alone.
+
+Verification: 663 unit tests and 55 game tests in CI. Still unverified by any
+automated run: how a real model follows the personality and the stage
+directions, and whether the larger prompt (about 1,000 tokens of system text
+per message, roughly twice the previous size) fits comfortably inside a given
+Groq plan's limits.
+
 ---
 
 ## M3 — Presence and a networking spine
@@ -217,7 +257,9 @@ Planned:
 - Each stage changes behaviour, sound, animation and dialogue *policy* — not
   just text. Stage transitions are logged for debugging and configurable
   (including turning escalation off entirely). Raise the `maxStage` cap beyond
-  1 when this milestone lands.
+  1 when this milestone lands. The dialogue side is already in place: since
+  0.3.0 every stage has its own voice in `StageDirections`, so raising the cap
+  is all it takes for conversation to follow.
 - Multiplayer-safe by design: the director is server-authoritative and per
   player, and a scare aimed at one player never overrides another's stage.
 - A `/falsity stage` admin command for testing every stage on demand (the

@@ -3,7 +3,7 @@
 	"id": "falsity",
 	"version": "${version}",
 	"name": "Falsity",
-	"description": "An original AI horror companion that is not quite what it seems. Falsity talks in ordinary chat (Groq with an offline fallback), follows orders, hands over items, answers questions about the world, builds, remembers each player, and has an evolving personality.",
+	"description": "An original AI horror companion that is not quite what it seems. Falsity talks in ordinary chat (Groq with an offline fallback), follows orders, hands over items, answers questions about the world, builds, remembers each player, and has a personality you can edit, feelings that evolve as you play, and a voice that changes with its horror stage.",
 	"authors": [
 		"GnikLlort"
 	],

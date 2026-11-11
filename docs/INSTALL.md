@@ -17,8 +17,8 @@ The jar is written to:
 build/libs/falsity-<version>.jar
 ```
 
-`<version>` is the value of `version` in `gradle.properties` (currently `0.2.2`),
-so the file is `build/libs/falsity-0.2.2.jar`.
+`<version>` is the value of `version` in `gradle.properties` (currently `0.3.0`),
+so the file is `build/libs/falsity-0.3.0.jar`.
 
 `./gradlew build` compiles the mod, runs the unit tests, runs the server-side
 game tests, and produces the jar. If any test fails the build stops and no jar
@@ -72,8 +72,12 @@ Once a Falsity is bonded to you (right-click it), you can:
   `conversation.cooldownSeconds`, the message waits its turn and is answered
   next. Nothing is dropped silently: a message that is too long, or addressed
   to Falsity while yours is out of range, gets a short note saying so.
+- With Groq set up, Falsity sometimes says something first, when you are close
+  and nobody has been talking. You can simply answer; its name is not needed.
+  `chat.speaksFirst` switches this off.
 - Use `/falsity` for the other commands: `summon`, `memory`, `personality`,
-  `horror`, and for operators `ai status`, `ai test` and `reload`.
+  `horror`, and for operators `ai status`, `ai test`, `reload` and
+  `personality reload`.
 
 The mod is configured through `config/falsity.json` (see
 `docs/falsity.example.json` for every option). The `chat`, `conversation`,
@@ -81,6 +85,12 @@ The mod is configured through `config/falsity.json` (see
 asked, item assistance, questions about the world and building respectively;
 all are on by default with conservative, clamped settings. After editing the
 file, `/falsity reload` applies it without a restart.
+
+Who Falsity is and how it talks is a second file, `config/falsity/personality.txt`.
+It is created with a default the first time the mod starts. Edit it in any text
+editor and save: the next thing Falsity says uses it. An empty or missing file
+falls back to the default, so Falsity is never left without a personality.
+[PERSONALITY.md](PERSONALITY.md) describes the file and everything around it.
 
 The limits that matter most in play:
 
@@ -97,6 +107,9 @@ The limits that matter most in play:
 | `world.scanRadius` | `24` | How far, in blocks, Falsity looks for ores and caves. Only chunks that are already loaded are read. |
 | `world.shareCoordinates` | `true` | Whether answers may contain coordinates. Also off when the `reducedDebugInfo` game rule is on. |
 | `conversation.cooldownSeconds` | `3` | Minimum time between two Groq requests of one player. |
+| `chat.speaksFirst` | `true` | Whether Falsity may say something without being spoken to. Needs Groq; each remark is one request. |
+| `chat.speaksFirstMinutes` | `10` | Least minutes between two such remarks to one player (2 to 240). |
+| `horror.allowUnsettlingLines` | `true` | Whether what Falsity says may turn unsettling as its horror stage rises. Off keeps its voice at the first stage; the stage itself is not affected. |
 
 ## Secrets: the Groq API key
 

@@ -47,10 +47,14 @@ ai/
   GroqClient          async Groq chat-completions client: request shapes,
                       retries, failure classification, log-safe diagnostics
   ConversationManager routes a message: local order, world question, Groq or
-                      offline; pacing and queueing; delivery on the server thread
+                      offline; pacing and queueing; delivery on the server thread;
+                      also lets Falsity speak first
   ConversationPacer   per-player cooldown, one request in flight, waiting messages
+  InitiativePacer     when Falsity may speak without being spoken to (rarely)
   ConversationHistory the last few exchanges per player, sent along as context
-  PromptBuilder       system prompt: identity, mood, memories, verified facts, rules
+  PromptBuilder       the system prompt in layers: rules, personality, horror
+                      stage, relationship, memory, world; each layer bounded
+  PromptAssembler     gathers the state for one turn into those layers (pure)
   AIResponseParser    dialogue + one allowlisted action request, tolerant of
                       the ways models write the tag
   ReplyComposer       what is finally said: the handler's words for facts and
@@ -84,10 +88,17 @@ memory/
   MemoryManager       synchronized cache, save-on-mutate, per-player isolation
   MemoryStorage       atomic JSON files under falsity-memory/<uuid>.json
   MemorySummarizer    local, deterministic summary (no API call)
+  FactExtractor       what a player says about themselves that is worth keeping
 personality/
   PersonalityProfile  nine traits (0-100), gradual evolution, prompt text
   PersonalityManager  facade: apply events by name, persist via memory
   EmotionalState      derived mood (never stored, never hostile)
+  PersonalityPromptStore  config/falsity/personality.txt: create, read, fall
+                      back to the default, notice changes
+  PersonalityPrompt   the personality text in use and where it came from
+  StageDirections     how the personality comes out at each horror stage
+  RelationshipState   owner, shared history, feelings, absences, treatment,
+                      in a few sentences
 horror/
   HorrorStage         Innocence..Nightmare (this milestone caps at Strange)
   HorrorProgression   pure tension -> stage rules (unit tested)
@@ -150,13 +161,14 @@ this order:
    tick. Only a wait longer than twenty seconds is refused, with the remaining
    time.
 
-A Groq request carries a prompt built by `PromptBuilder`: identity,
-personality and mood, the memory summary plus keyword-matched relevant
-memories (never the full history), a line of **verified facts** that
-`WorldService` has just read from the world (dimension, position when allowed,
-biome, time, weather), and the rules, which come last and are never the part
-that is cut when the prompt is long. `ConversationHistory` adds the last
-`groq.historyTurns` exchanges so replies stay on topic.
+A Groq request carries a prompt built in layers (see *The prompt* below):
+the mod's rules, the personality text, the horror stage's voice, the
+relationship, the memories that bear on the message, and a line of **verified
+facts** that `WorldService` has just read from the world (dimension, position
+when allowed, biome, time, weather, and, only when true, that the player is
+badly hurt or that hostile mobs are close). `ConversationHistory` adds the last
+`groq.historyTurns` exchanges so replies stay on topic, and the player's message
+comes last.
 
 The request is sent with `HttpClient.sendAsync`; the server tick never blocks.
 The reply is scheduled back onto the server thread (`MinecraftServer.execute`),
@@ -175,6 +187,55 @@ the player and entity are re-checked, and then:
 Any failure (timeout, 429, 5xx, empty or malformed body, no network) lands on
 the offline line for that message, and is logged at WARN with the request's
 diagnostics and a sentence of advice.
+
+### The prompt: seven layers, most binding first
+
+`PromptAssembler` gathers the state for a turn and `PromptBuilder` lays it out.
+Both are free of Minecraft types, so the code that runs on a server is the code
+the unit tests run.
+
+| # | Layer | Source | Bound |
+| --- | --- | --- | --- |
+| 1 | Rules | Fixed text in `PromptBuilder`: reply format, what may never be said, the action tags, "never invent a memory" | fixed |
+| 2 | Personality | `config/falsity/personality.txt` through `PersonalityPromptStore`, or the built-in default | 1,500 characters |
+| 3 | Horror stage | `StageDirections` for the stage `HorrorManager` reports | under 600 |
+| 4 | Relationship | `RelationshipState`, read off the player's memory | 460 |
+| 5 | Memory | Relevant memories, a rotating handful of other facts, and the last conversation when there is no live transcript | 700, and only the room that is left |
+| 6 | World | Verified facts and the note about this message | 480 + 200 |
+| 7 | The message | `ConversationHistory` turns, then the player's words | `groq.historyTurns`, 1,200 characters |
+
+Layers 1 to 6 are the system message, capped at 5,600 characters in total; a
+typical one is about 4,000. The order is the order of authority. The rules say
+that nothing below them can change them; the stage layer is headed "this
+changes how your personality shows, never who you are", and every stage's
+directions are written against "the companion described above" rather than
+restating traits, so a custom personality and a horror stage never give
+conflicting instructions.
+
+The horror layer takes its stage from the horror system and nothing else:
+`PromptAssembler.voiceStage` returns `HorrorManager.stageFor`, or the first
+stage when `HorrorManager.shouldUnsettle` says unsettling lines are switched
+off. The same value is handed to `OfflineFallback`, so the stage means the same
+thing with Groq and without.
+
+The personality file is one text for the whole installation; everything that
+differs per player (trait values, mood, stage, tension, memories) stays in that
+player's memory file. Reloading or replacing the personality therefore cannot
+reset anyone's progression: the store never writes to memory at all.
+
+### Speaking first
+
+Every 100 ticks a Falsity whose owner is within 12 blocks offers
+`ConversationManager.offerToSpeakFirst` a chance. `InitiativePacer` says yes
+rarely: not on first sight, not within half an interval of the last exchange,
+at most once per `chat.speaksFirstMinutes` plus slack, and never a third time
+running if the player has done nothing since. A yes becomes one Groq request
+whose last message is a fixed stage direction instead of a player's words. The
+reply is spoken as words only (any action tag in it is discarded), recorded in
+the transcript so the player's answer has context, and warms the chat context
+so that answer needs no name. It is not a conversation: no counts, no
+personality event, no horror interaction. Without Groq nothing is said, because
+there are no lines written in advance for it.
 
 ### Groq client: what is sent, what is retried, what is reported
 
@@ -351,6 +412,11 @@ can never leak into another's.
 
 ### Personality and horror: separate from conversation
 
+"Personality" is two things. Who Falsity is and how it talks is the text in
+`config/falsity/personality.txt` (layer 2 above). How Falsity feels about one
+player is `PersonalityProfile`, described next, which the relationship layer
+puts into words.
+
 Personality (`PersonalityProfile`) is nine 0–100 traits starting from config
 defaults and drifting by small deltas per event (bond, pet, conversation,
 order, return, absence, stranger, startle), scaled by `evolutionRate`.
@@ -362,6 +428,12 @@ configured `maxStage` (clamped to 1 in this milestone) caps everything.
 harmless: staring (stop + look for a few seconds, rare, cooldown-gated) and
 occasionally recalling an old fact ("I still remember..."). Nothing can
 damage, trap or move the player, and hostility is tracked but never acted on.
+
+The personality system reads the horror system and never writes to it. The
+stage it is given decides which of the five voices in `StageDirections` goes
+into the prompt, and how often the offline lines recall a fact. A stage set by
+hand with `/falsity horror set` is recomputed from tension at the player's next
+interaction, as it always was.
 
 ### Ticking budget
 
@@ -435,7 +507,8 @@ The config has these blocks: `companion`, `groq`, `conversation`, `memory`,
 `personality`, `horror`, `chat`, `items`, `building`, `autonomy` and `world`.
 `conversation` paces Groq requests (cooldown, requests per minute, message
 length). `chat` controls natural-chat enablement, the conversation context
-timeout, the mention/response range and the max message length. `items`
+timeout, the mention/response range, the max message length, and whether and
+how often Falsity may speak first. `items`
 controls item assistance enablement, the permission mode (creative / operator /
 owner / unrestricted / none), the per-item and per-request caps, the
 confirmation threshold and a cooldown. `world` controls world questions: who
@@ -449,9 +522,14 @@ kinds of help off. Missing keys fall back to defaults, so an existing
 `configVersion` records which defaults a file was written with. When a default
 changes for a reason (the conversation cooldown went from ten seconds to
 three), a file that still holds the old default is moved to the new one on
-load, while a value the owner chose is kept. `/falsity reload` re-reads the file
-and applies it in place; an unreadable file leaves the running settings as they
-were.
+load, while a value the owner chose is kept. Format 3 changed no value; it
+exists so that the two `chat.speaksFirst` options are written into files that
+predate them. `/falsity reload` re-reads the file and applies it in place; an
+unreadable file leaves the running settings as they were.
+
+The personality text is not in this file. It is plain text in
+`config/falsity/personality.txt`, so it can be written without escaping or
+quoting, and it has its own reload (see `docs/PERSONALITY.md`).
 
 Secrets do not live here. The Groq API key is read from the `GROQ_API_KEY`
 environment variable first, then from git-ignored `secrets.json` in the game
@@ -465,8 +543,8 @@ file, placeholder text, a stray space), the reason is logged once and shown by
 
 | Layer | What it proves | Where |
 | --- | --- | --- |
-| Unit tests (482) | Groq request shapes, retries, failure classification, redaction and status; the client's real HTTP code against a local server; key lookup in every place and shape; reply parsing against the ways models write tags; prompt rules and bounds; pacing, queueing and history; offline replies; intent recognition tables; item parsing, resolution against the full vanilla item list, limits and wording; world-question recognition, directions, terrain scans, answer wording and the fact guard; config parsing, clamping and migration; memory, personality, horror, chat detection, confirmations | `src/test` |
-| Game tests (35) | On a real server: entity registers, spawns, ticks, bonds, obeys orders, walks to its owner; memory, personality and horror persist; multi-item requests deliver every item, unknown items are never invented, limits create nothing; position, biome, structure and ore answers match the world; hidden coordinates stay hidden; switched-off help is declined; whole conversations from chat message to prompt, reply, action and memory with only the network replaced | `src/gametest` |
+| Unit tests (663) | Groq request shapes, retries, failure classification, redaction and status; the client's real HTTP code against a local server; key lookup in every place and shape; reply parsing against the ways models write tags; the personality file (creation, loading, every fallback, limits, reload); the prompt's layers, their order and bounds; a voice for every horror stage; the relationship wording; the whole personality system over real files with only the network replaced, including that changing the personality never resets horror progress and that a restart changes nothing; pacing, queueing, history and speaking first; offline replies; intent recognition tables; item parsing, resolution against the full vanilla item list, limits and wording; world-question recognition, directions, terrain scans, answer wording and the fact guard; config parsing, clamping and migration; memory, fact extraction, personality, horror, chat detection, confirmations | `src/test` |
+| Game tests (55) | On a real server: entity registers, spawns, ticks, bonds, obeys orders, walks to its owner; memory, personality and horror persist; multi-item requests deliver every item, unknown items are never invented, limits create nothing; position, biome, structure and ore answers match the world; hidden coordinates stay hidden; switched-off help is declined; whole conversations from chat message to prompt, reply, action and memory with only the network replaced; the personality file is created, a custom one is sent, each horror stage sends its own voice, a changed personality keeps horror progress; Falsity speaks first only when its moment has come, never without Groq, never with an action | `src/gametest` |
 | Live Groq tests (2, opt-in) | Groq accepts the default request and returns something Falsity can say. They run only when `GROQ_API_KEY` is set and are reported as skipped otherwise | `GroqLiveTest` |
 | Static asset validation | JSON validity, entrypoints exist, textures exist and match the model's UV bounds, translation keys present | `tools/validate_assets.py` |
 | Preview render | the geometry and texture actually compose into the intended creature | `tools/generate_assets.py --preview` |
