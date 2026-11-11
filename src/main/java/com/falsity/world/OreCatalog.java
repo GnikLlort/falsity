@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * The ores Falsity can look for nearby, and the words players use for them.
@@ -24,6 +25,29 @@ public final class OreCatalog {
 	 */
 	public record Entry(String key, String label, List<String> blockIds, List<String> aliases) {
 	}
+
+	/**
+	 * Where a piece of text mentions an ore.
+	 *
+	 * @param entry  the ore
+	 * @param alias  the wording that matched
+	 * @param before the words in front of it, lower-case, for context checks
+	 */
+	public record Match(Entry entry, String alias, String before) {
+	}
+
+	/**
+	 * Words that turn a material into a made thing. "Iron" is an ore to look
+	 * for; "iron pickaxe", "iron door" and "iron golem" are not.
+	 */
+	private static final Set<String> MADE_THINGS = Set.of(
+		"axe", "pickaxe", "pick", "shovel", "hoe", "sword", "spear", "helmet", "chestplate", "leggings", "boots", "armor",
+		"armour", "tool", "tools", "gear", "set", "horse", "nautilus", "block", "blocks", "ingot", "ingots", "nugget",
+		"nuggets", "bars", "chain", "chains", "door", "doors", "trapdoor", "trapdoors", "golem", "golems", "apple",
+		"apples", "carrot", "carrots", "bulb", "chest", "grate", "lantern", "torch", "torches", "wall", "lamp", "lamps",
+		"wire", "dust", "repeater", "comparator", "bricks", "pillar", "slab", "slabs", "stairs", "scrap", "upgrade",
+		"farm", "farms", "shears", "bucket", "rod", "plate", "rail", "rails"
+	);
 
 	private static final Map<String, Entry> ENTRIES = new LinkedHashMap<>();
 
@@ -75,17 +99,39 @@ public final class OreCatalog {
 
 	/** Finds the ore a piece of text talks about. Whole words, longest wording first. */
 	public static Optional<Entry> find(String text) {
+		return match(text).map(Match::entry);
+	}
+
+	/**
+	 * Finds where a piece of text mentions an ore, skipping made things: in
+	 * "where is my iron pickaxe" nothing is an ore.
+	 */
+	public static Optional<Match> match(String text) {
 		if (text == null || text.isBlank()) {
 			return Optional.empty();
 		}
 		String lower = " " + text.toLowerCase(Locale.ROOT).replace('_', ' ').replaceAll("[^a-z0-9 ]", " ").replaceAll("\\s+", " ").trim() + " ";
-		Entry best = null;
-		int bestLength = 0;
+		Match best = null;
 		for (Entry entry : ENTRIES.values()) {
 			for (String alias : entry.aliases()) {
-				if (alias.length() > bestLength && lower.contains(" " + alias + " ")) {
-					best = entry;
-					bestLength = alias.length();
+				if (best != null && alias.length() <= best.alias().length()) {
+					continue;
+				}
+				String needle = " " + alias + " ";
+				int from = 0;
+				while (true) {
+					int index = lower.indexOf(needle, from);
+					if (index < 0) {
+						break;
+					}
+					String after = lower.substring(index + needle.length());
+					int space = after.indexOf(' ');
+					String next = space < 0 ? after : after.substring(0, space);
+					if (!MADE_THINGS.contains(next)) {
+						best = new Match(entry, alias, lower.substring(0, index).trim());
+						break;
+					}
+					from = index + 1;
 				}
 			}
 		}

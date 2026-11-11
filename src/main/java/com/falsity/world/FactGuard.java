@@ -17,16 +17,30 @@ import java.util.regex.Pattern;
  * Otherwise the reply is rejected and Falsity says it does not know.
  */
 public final class FactGuard {
-	/** "x=120", "y: 64", "z -30". */
-	private static final Pattern LABELLED = Pattern.compile("\\b[xyz]\\s*[:=]?\\s*(-?\\d{1,7})\\b", Pattern.CASE_INSENSITIVE);
+	/** "x=120", "y: 64", "z -30". Not "x32", which is how people write "32 of them". */
+	private static final Pattern LABELLED = Pattern.compile(
+		"\\b[xyz](?:\\s*[:=]\\s*|\\s+)(-?\\d{1,7})\\b", Pattern.CASE_INSENSITIVE);
 
-	/** "120, 64, -30", "120 / 64 / -30", "(120, -30)". */
+	/** "120, 64, -30", "(120, -30)". */
 	private static final Pattern TUPLE = Pattern.compile(
-		"(?<![\\w.])(-?\\d{1,7})\\s*[,/]\\s*(-?\\d{1,7})(?:\\s*[,/]\\s*(-?\\d{1,7}))?(?![\\w.])");
+		"(?<![\\w,])(?<!\\d\\.)(-?\\d{1,7})\\s*,\\s*(-?\\d{1,7})(?:\\s*,\\s*(-?\\d{1,7}))?(?!\\w|\\.\\d)");
 
-	/** "200 blocks", "about 3 chunks away", "50 meters north". */
+	/** "1,000" and "12,500,000": one number written with separators, not a pair of coordinates. */
+	private static final Pattern THOUSANDS = Pattern.compile("(?<![\\w,])(?<!\\d\\.)\\d{1,3}(?:,\\d{3})+(?!\\w|,\\d|\\.\\d)");
+
+	/** "120 / 64 / -30". Two numbers with a slash ("24/7", "50/50", "10/10") are not a position. */
+	private static final Pattern SLASHED = Pattern.compile(
+		"(?<![\\w/])(?<!\\d\\.)(-?\\d{1,7})\\s*/\\s*(-?\\d{1,7})\\s*/\\s*(-?\\d{1,7})(?!\\w|/|\\.\\d)");
+
+	/**
+	 * "200 blocks away", "about 3 chunks north", "12 blocks down". "Up" and
+	 * "down" only count right after the distance, since "hurry up" and "calm
+	 * down" turn up in ordinary sentences.
+	 */
 	private static final Pattern DISTANCE = Pattern.compile(
-		"(-?\\d{1,7})\\s*(?:blocks?|chunks?|meters?|metres?|m)\\b(?=[^.!?]{0,40}\\b(?:away|north|south|east|west|ahead|behind|from here|from us|from you|down|up|below|above|deep)\\b)",
+		"(-?\\d{1,7})\\s*(?:blocks?|chunks?|meters?|metres?|m)\\b"
+		+ "(?=\\s+(?:straight\\s+|further\\s+)?(?:up|down)\\b"
+		+ "|[^.!?]{0,40}\\b(?:away|north|south|east|west|ahead|behind|from here|from us|from you|below|above|deep|underground)\\b)",
 		Pattern.CASE_INSENSITIVE);
 
 	/** "at 120 64 -30", "coordinates 120 64 -30". */
@@ -34,9 +48,9 @@ public final class FactGuard {
 		"\\b(?:at|to|coordinates?|coords|position|located|location)\\s*:?\\s*(-?\\d{1,7})\\s+(-?\\d{1,7})(?:\\s+(-?\\d{1,7}))?\\b",
 		Pattern.CASE_INSENSITIVE);
 
-	/** "Y level 12", "height 64", "layer -59". */
+	/** "Y level 12", "height 64", "layer -59". Not "level 30", which is experience. */
 	private static final Pattern LEVEL = Pattern.compile(
-		"\\b(?:y[- ]?level|level|height|layer|altitude)\\s*(?:of\\s*)?(-?\\d{1,4})\\b", Pattern.CASE_INSENSITIVE);
+		"\\b(?:y[- ]?level|height|layer|altitude)\\s*(?:of\\s*)?(-?\\d{1,4})\\b", Pattern.CASE_INSENSITIVE);
 
 	private static final Pattern NUMBER = Pattern.compile("-?\\d+");
 
@@ -52,11 +66,71 @@ public final class FactGuard {
 			return false;
 		}
 		Set<String> verified = numbersIn(verifiedFacts);
-		return claims(LABELLED, reply, verified)
-			|| claims(TUPLE, reply, verified)
-			|| claims(DISTANCE, reply, verified)
-			|| claims(SPACED, reply, verified)
-			|| claims(LEVEL, reply, verified);
+		// "1,000 years" is one number; without its separators it cannot be read as a pair.
+		String text = joinThousands(reply);
+		return claims(LABELLED, text, verified)
+			|| tupleClaims(text, verified)
+			|| claims(SLASHED, text, verified)
+			|| claims(DISTANCE, text, verified)
+			|| claims(SPACED, text, verified)
+			|| claims(LEVEL, text, verified);
+	}
+
+	/** Writes "1,000" as "1000". A pair in brackets, "(120,640)", is left alone: that is a position. */
+	private static String joinThousands(String text) {
+		Matcher matcher = THOUSANDS.matcher(text);
+		StringBuilder builder = new StringBuilder();
+		while (matcher.find()) {
+			boolean bracketed = matcher.start() > 0 && text.charAt(matcher.start() - 1) == '('
+				&& matcher.end() < text.length() && text.charAt(matcher.end()) == ')';
+			matcher.appendReplacement(builder, bracketed ? matcher.group() : matcher.group().replace(",", ""));
+		}
+		matcher.appendTail(builder);
+		return builder.toString();
+	}
+
+	/**
+	 * Like {@link #claims}, for number lists. Counting aloud ("1, 2, 3" or "3,
+	 * 2, 1") is not a position and is let through.
+	 */
+	private static boolean tupleClaims(String reply, Set<String> verified) {
+		Matcher matcher = TUPLE.matcher(reply);
+		while (matcher.find()) {
+			if (isCounting(matcher)) {
+				continue;
+			}
+			for (int group = 1; group <= matcher.groupCount(); group++) {
+				String number = matcher.group(group);
+				if (number != null && !verified.contains(canonical(number))) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	private static boolean isCounting(Matcher tuple) {
+		int previous = 0;
+		int step = 0;
+		for (int group = 1; group <= tuple.groupCount(); group++) {
+			String number = tuple.group(group);
+			if (number == null) {
+				continue;
+			}
+			int value = Integer.parseInt(number);
+			if (value < 0 || value > 20) {
+				return false;
+			}
+			if (group > 1) {
+				int difference = value - previous;
+				if (Math.abs(difference) != 1 || (step != 0 && difference != step)) {
+					return false;
+				}
+				step = difference;
+			}
+			previous = value;
+		}
+		return true;
 	}
 
 	/** What Falsity says instead of an unverified location. */
@@ -82,7 +156,7 @@ public final class FactGuard {
 		if (text == null) {
 			return numbers;
 		}
-		Matcher matcher = NUMBER.matcher(text);
+		Matcher matcher = NUMBER.matcher(joinThousands(text));
 		while (matcher.find()) {
 			String number = canonical(matcher.group());
 			numbers.add(number);

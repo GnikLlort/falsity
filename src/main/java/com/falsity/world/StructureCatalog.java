@@ -29,6 +29,16 @@ public final class StructureCatalog {
 	public record Entry(String key, String label, String dimension, List<String> ids, List<String> aliases) {
 	}
 
+	/**
+	 * Where a piece of text mentions a structure.
+	 *
+	 * @param entry  the structure
+	 * @param alias  the wording that matched
+	 * @param before the words in front of it, lower-case, for context checks
+	 */
+	public record Match(Entry entry, String alias, String before) {
+	}
+
 	private static final Map<String, Entry> ENTRIES = new LinkedHashMap<>();
 	private static final List<Map.Entry<String, Entry>> ALIASES_LONGEST_FIRST = new ArrayList<>();
 
@@ -84,7 +94,7 @@ public final class StructureCatalog {
 		add("nether_fossil", "a nether fossil", "the_nether", List.of("nether_fossil"),
 			"nether fossil");
 		add("end_city", "an end city", "the_end", List.of("end_city"),
-			"end city", "end ship", "elytra");
+			"end city", "end ship");
 
 		for (Entry entry : ENTRIES.values()) {
 			for (String alias : entry.aliases()) {
@@ -120,17 +130,23 @@ public final class StructureCatalog {
 	 * whole words only.
 	 */
 	public static Optional<Entry> find(String text) {
+		return match(text).map(Match::entry);
+	}
+
+	/** Like {@link #find}, and also reports the wording that matched and what came before it. */
+	public static Optional<Match> match(String text) {
 		if (text == null || text.isBlank()) {
 			return Optional.empty();
 		}
 		String lower = " " + text.toLowerCase(Locale.ROOT).replace('_', ' ').replaceAll("[^a-z0-9 ]", " ").replaceAll("\\s+", " ").trim() + " ";
 		Optional<Entry> direct = byKey(lower.trim().replace(' ', '_'));
 		if (direct.isPresent()) {
-			return direct;
+			return Optional.of(new Match(direct.get(), lower.trim(), ""));
 		}
 		for (Map.Entry<String, Entry> alias : ALIASES_LONGEST_FIRST) {
-			if (lower.contains(" " + alias.getKey() + " ")) {
-				return Optional.of(alias.getValue());
+			int index = lower.indexOf(" " + alias.getKey() + " ");
+			if (index >= 0) {
+				return Optional.of(new Match(alias.getValue(), alias.getKey(), lower.substring(0, index).trim()));
 			}
 		}
 		return Optional.empty();

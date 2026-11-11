@@ -203,7 +203,7 @@ public final class ItemResolver {
 				}
 			}
 			for (String candidate : spellings(rest)) {
-				if (catalog.exists(candidate)) {
+				if (!NEVER_DIRECT.contains(candidate) && catalog.exists(candidate)) {
 					return item(requested, candidate, candidate.replace('_', ' '), "");
 				}
 			}
@@ -224,7 +224,7 @@ public final class ItemResolver {
 
 		// 7. "gold" and "golden" are used interchangeably by players.
 		for (String candidate : spellings(swapGold(words))) {
-			if (catalog.exists(candidate)) {
+			if (!NEVER_DIRECT.contains(candidate) && catalog.exists(candidate)) {
 				return item(requested, candidate, candidate.replace('_', ' '), "");
 			}
 		}

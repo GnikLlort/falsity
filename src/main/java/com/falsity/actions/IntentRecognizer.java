@@ -119,14 +119,39 @@ public final class IntentRecognizer {
 		Pattern.CASE_INSENSITIVE);
 
 	private static final Pattern ITEM_REQUEST = Pattern.compile(
-		"^(?:give me|bring me|get me|fetch me|hand me|pass me|drop me|deliver me|find me|grab me|toss me|throw me|lend me|spawn me"
+		"^(give me|bring me|get me|fetch me|hand me|pass me|drop me|deliver me|find me|grab me|toss me|throw me|lend me|spawn me"
 		+ "|craft me|make me|gimme|give us|get us|bring us|i need|i want|i'?d like|i would like|i could use|i require|i'?ll take|i will take"
 		+ "|can i have|may i have|could i have|can i get|could i get|may i get|can we have|could we have)"
 		+ "\\s+(.+)$",
 		Pattern.CASE_INSENSITIVE);
 
-	/** After "I need" or "I want", these openings are not items: "to ...", "you to ...". */
-	private static final Pattern NOT_AN_ITEM = Pattern.compile("^(?:to|you|your|u|him|her|them|someone|somebody|us)\\b", Pattern.CASE_INSENSITIVE);
+	/** After "I need" or "I want", these openings are not items: "to ...", "you to ...", "it all", "out of here". */
+	private static final Pattern NOT_AN_ITEM = Pattern.compile(
+		"^(?:to|you|your|u|him|her|them|someone|somebody|us|it|out|off|away|there|here|back|home|up|down|all your|all of your|all my"
+		+ "|everything|anything|nothing|both)\\b",
+		Pattern.CASE_INSENSITIVE);
+
+	/**
+	 * Things people ask for that nobody can hand over: "give me a moment", "I
+	 * need a break", "can I have a hug". These are conversation.
+	 */
+	private static final Pattern NOT_A_THING = Pattern.compile(
+		"^(?:moment|second|sec|minute|min|while|bit|break|rest|nap|hand|chance|hug|hugs|kiss|cuddle|smile|time|space|peace|quiet|"
+		+ "peace and quiet|love|attention|company|luck|hope|sleep|friend|friends|answer|answers|reason|clue|hint|idea|"
+		+ "name|story|joke|song|try|turn|go|lift|ride|favou?r|word|life|vacation|holiday|drink of water|air|fresh air|truth|"
+		+ "revenge|plan|directions|strength|courage|offer|promise|refill|one|two|three|four|five|six|seven|eight|nine|ten)"
+		+ "(?:\\s+(?:to|from|with|for|of|on|in|or|and|here|now|there|first|alone|please)\\b.*)?$",
+		Pattern.CASE_INSENSITIVE);
+
+	/**
+	 * "Make me a sandwich" and "make me 3 torches" ask for something; "make me
+	 * happy" and "make me laugh" do not. After "make me" a thing is announced
+	 * by an article or an amount.
+	 */
+	private static final Pattern ANNOUNCES_A_THING = Pattern.compile(
+		"^(?:a|an|some|the|another|more|\\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|dozen|couple|few|several|half|"
+		+ "stack|stacks)\\b",
+		Pattern.CASE_INSENSITIVE);
 
 	private static final Pattern SENTENCE_BREAK = Pattern.compile("(?<=[.!?;])\\s+");
 	private static final Pattern TRAILING_NOISE = Pattern.compile("[\\s.,!?;:]+$");
@@ -176,9 +201,9 @@ public final class IntentRecognizer {
 	}
 
 	/**
-	 * Whether the message asks for items in a way that only makes sense as a
-	 * wish ("I need", "I want", "can I have"), as opposed to an order ("give
-	 * me"). A wish for something that is not an item is conversation.
+	 * Whether the message asks to be handed something: "give me 3 torches", "I
+	 * need a bed". Wishes for things nobody can hand over ("I need a hug",
+	 * "give me a moment") are conversation and return false.
 	 */
 	public static boolean isItemRequest(String message) {
 		return recognize(message)
@@ -187,6 +212,8 @@ public final class IntentRecognizer {
 	}
 
 	private static Optional<ActionRequest> recognizeSentence(String rawSentence) {
+		Matcher ending = TRAILING_NOISE.matcher(rawSentence.trim());
+		boolean endsWithQuestionMark = ending.find() && ending.group().indexOf('?') >= 0;
 		String sentence = TRAILING_NOISE.matcher(rawSentence.trim()).replaceFirst("").trim();
 		// "Hey,  can you" arrives as "Hey, can you"; a space before punctuation is noise too.
 		sentence = sentence.replaceAll("\\s+([,.!?;:])", "$1");
@@ -278,7 +305,7 @@ public final class IntentRecognizer {
 		}
 
 		// "Where is the nearest village", "any diamonds nearby".
-		Optional<WorldQuery> search = WorldQueryRecognizer.recognizeSearch(said);
+		Optional<WorldQuery> search = WorldQueryRecognizer.recognizeSearch(said, endsWithQuestionMark);
 		if (search.isPresent()) {
 			return Optional.of(worldQuery(search.get()));
 		}
@@ -306,13 +333,29 @@ public final class IntentRecognizer {
 		if (!matcher.matches()) {
 			return Optional.empty();
 		}
-		String remainder = TRAILING_NOISE.matcher(matcher.group(1).trim()).replaceFirst("").trim();
+		String verb = matcher.group(1).toLowerCase(Locale.ROOT);
+		String remainder = TRAILING_NOISE.matcher(matcher.group(2).trim()).replaceFirst("").trim();
 		if (remainder.isEmpty() || NOT_AN_ITEM.matcher(remainder).find()) {
+			return Optional.empty();
+		}
+		if (verb.equals("find me") && WorldQueryRecognizer.namesPlace(remainder)) {
+			// "Find me a village" asks where one is; nobody can be handed a village.
+			return Optional.empty();
+		}
+		if (verb.equals("make me") && !ANNOUNCES_A_THING.matcher(remainder).find()) {
 			return Optional.empty();
 		}
 
 		List<ItemRequestParser.Entry> entries = ItemRequestParser.parse(remainder);
 		if (entries.isEmpty()) {
+			return Optional.empty();
+		}
+		boolean anyThing = false;
+		for (ItemRequestParser.Entry entry : entries) {
+			anyThing |= !NOT_A_THING.matcher(entry.name()).matches();
+		}
+		if (!anyThing) {
+			// "I need a hug", "give me a moment", "I want love and attention".
 			return Optional.empty();
 		}
 		for (ItemRequestParser.Entry entry : entries) {

@@ -2,6 +2,7 @@ package com.falsity.world;
 
 import java.util.Locale;
 import java.util.Optional;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -22,10 +23,11 @@ public final class WorldQueryRecognizer {
 		+ "can you see|do you see|see any|scan|sense|detect|looking for|point me|lead me|take me|guide me|way to|show me)";
 
 	private static final String PROXIMITY =
-		"(?:nearby|near here|near me|near us|near you|around here|around us|around me|around|close by|close to (?:me|us|here)|"
-		+ "down here|in here|underground|below us|under us|beneath us|in this area|in the area|in this cave|here)";
+		"(?:nearby|near here|near me|near us|near you|near (?:a|an|any|the)|around here|around us|around me|around|close by|"
+		+ "close to (?:me|us|here|a|an|any|the)|down here|in here|underground|below us|under us|beneath us|in this area|in the area|"
+		+ "in this cave|here)";
 
-	private static final String WONDERING = "(?:is there|are there|any|know of|know where|do you know)";
+	private static final String WONDERING = "(?:is there|are there|any|do you know (?:of|where|if|any|whether))";
 
 	private static final Pattern STRONG_FRAME = Pattern.compile("\\b" + ASKING + "\\b");
 	private static final Pattern PROXIMITY_FRAME = Pattern.compile("\\b" + PROXIMITY + "\\b");
@@ -76,21 +78,41 @@ public final class WorldQueryRecognizer {
 	private static final Pattern STORY = Pattern.compile(
 		"^(?:i|we) (?:found|saw|went|was|were|visited|built|made|had|did|died|lost|killed|love|like|hate|remember|came|got|lived|have been|just)\\b");
 
+	/**
+	 * Openings that state something rather than ask: "there are diamonds
+	 * here", "here are some diamonds for you", "I know where the village is".
+	 * A question mark turns them back into questions.
+	 */
+	private static final Pattern STATEMENT = Pattern.compile(
+		"^(?:there'?s|there (?:is|are|was|were)|here'?s|here (?:is|are)|it'?s|it (?:is|was)|that'?s|that (?:is|was)|this is|these are|those are"
+		+ "|(?:i|we) (?:know|have(?! to\\b)|think|guess|bet|heard|mined|own|keep)|i'?ve|we'?ve)\\b");
+
+	/** Where one thought ends and the next begins inside a sentence. */
+	private static final Pattern CLAUSE_BREAK = Pattern.compile("\\s*[,;:.!?]+\\s*|\\s+(?:but|so)\\s+", Pattern.CASE_INSENSITIVE);
+
+	/** How a question starts when nobody bothers with the question mark: "is the village nearby", "what ores are around". */
+	private static final Pattern INTERROGATIVE = Pattern.compile(
+		"^(?:what|which|where|how|is|are|any|do|does|did|can|could|will|would|have|has)\\b");
+
+	/** Words that add nothing to "diamonds nearby" or "a village near here". */
+	private static final Pattern FILLER = Pattern.compile("\\b(?:a|an|the|some|any|more|other)\\b");
+
+	/**
+	 * "My iron", "our village", "your elytra": the thing belongs to someone, so
+	 * the player is not asking where the world generated one.
+	 */
+	private static final Pattern OWNED = Pattern.compile("(?:^|\\s)(?:my|our|your|his|her|their)(?:\\s+[a-z]+){0,2}$");
+
 	private WorldQueryRecognizer() {
 	}
 
 	/** The world question this message asks, or empty when it is not one. */
 	public static Optional<WorldQuery> recognize(String message) {
-		String text = normalise(message);
-		if (text.isEmpty() || STORY.matcher(text).find()) {
-			return Optional.empty();
-		}
-
-		Optional<WorldQuery> simple = recognizeSimple(text);
+		Optional<WorldQuery> simple = recognizeSimple(message);
 		if (simple.isPresent()) {
 			return simple;
 		}
-		return recognizeSearch(text);
+		return recognizeSearch(message);
 	}
 
 	/**
@@ -129,28 +151,68 @@ public final class WorldQueryRecognizer {
 
 	/** Searches: structures, ores, caves and a general look around. */
 	public static Optional<WorldQuery> recognizeSearch(String message) {
-		String text = normalise(message);
-		if (text.isEmpty() || STORY.matcher(text).find()) {
+		return recognizeSearch(message, message != null && message.trim().endsWith("?"));
+	}
+
+	/**
+	 * Searches, for a sentence whose closing punctuation has already been
+	 * removed. {@code question} says whether it ended in a question mark.
+	 *
+	 * <p>A place or ore name is only a search when the sentence asks for one:
+	 * "where is the nearest village", "any diamonds nearby", "find a cave".
+	 * A place word next to "nearby" or "here" is a search only as a question
+	 * ("village nearby?", "is the village near here") or with nothing else
+	 * said ("diamonds nearby").
+	 * Statements such as "there are diamonds here" stay conversation.
+	 */
+	public static Optional<WorldQuery> recognizeSearch(String message, boolean question) {
+		if (message == null) {
 			return Optional.empty();
 		}
+		// "I just got here, where is the nearest village?": the story ends at
+		// the comma, so each part of the sentence is read on its own.
+		for (String part : CLAUSE_BREAK.split(message)) {
+			String clause = normalise(part);
+			if (clause.isEmpty() || STORY.matcher(clause).find()) {
+				continue;
+			}
+			if (!question && STATEMENT.matcher(clause).find()) {
+				continue;
+			}
+			Optional<WorldQuery> found = searchClause(clause, question || INTERROGATIVE.matcher(clause).find());
+			if (found.isPresent()) {
+				return found;
+			}
+		}
+		return Optional.empty();
+	}
+
+	private static Optional<WorldQuery> searchClause(String text, boolean question) {
 		boolean strong = STRONG_FRAME.matcher(text).find();
 		boolean near = PROXIMITY_FRAME.matcher(text).find();
 		boolean weak = WEAK_FRAME.matcher(text).find();
 
-		Optional<StructureCatalog.Entry> structure = StructureCatalog.find(text);
-		if (structure.isPresent() && (strong || near || weak)) {
-			return Optional.of(new WorldQuery(WorldQuery.Kind.STRUCTURE, structure.get().key(), text));
+		Optional<StructureCatalog.Match> structure = StructureCatalog.match(text);
+		if (structure.isPresent() && !OWNED.matcher(structure.get().before()).find()
+			&& (strong || weak || (near && (question || isBare(text, structure.get().alias()))))) {
+			return Optional.of(new WorldQuery(WorldQuery.Kind.STRUCTURE, structure.get().entry().key(), text));
 		}
 
-		if (CAVE_WORD.matcher(text).find() && (strong || near || weak)) {
+		// "Is there gold in this cave" is about gold: a cave word that only
+		// says where to look is not what is being looked for.
+		Matcher cave = CAVE_WORD.matcher(PROXIMITY_FRAME.matcher(text).replaceAll(" "));
+		if (cave.find() && (strong || weak || (near && (question || isBare(text, cave.group()))))) {
 			return Optional.of(new WorldQuery(WorldQuery.Kind.CAVE, "", text));
 		}
 
-		Optional<OreCatalog.Entry> ore = OreCatalog.find(text);
-		if (ore.isPresent() && (strong || near)) {
-			return Optional.of(new WorldQuery(WorldQuery.Kind.ORE, ore.get().key(), text));
+		// Ores need more than "any": "do you have any diamonds" is not a search.
+		Optional<OreCatalog.Match> ore = OreCatalog.match(text);
+		if (ore.isPresent() && !OWNED.matcher(ore.get().before()).find()
+			&& (strong || (near && (weak || question || isBare(text, ore.get().alias()))))) {
+			return Optional.of(new WorldQuery(WorldQuery.Kind.ORE, ore.get().entry().key(), text));
 		}
-		if (ORE_WORD.matcher(text).find() && (strong || near || weak)) {
+		Matcher oreWord = ORE_WORD.matcher(text);
+		if (oreWord.find() && (strong || weak || (near && (question || isBare(text, oreWord.group()))))) {
 			return Optional.of(new WorldQuery(WorldQuery.Kind.ORE, "", text));
 		}
 
@@ -158,6 +220,13 @@ public final class WorldQueryRecognizer {
 			return Optional.of(new WorldQuery(WorldQuery.Kind.SURROUNDINGS, "", text));
 		}
 		return Optional.empty();
+	}
+
+	/** Whether the text is nothing but the subject and where to look: "diamonds nearby", "a village near here". */
+	private static boolean isBare(String text, String subject) {
+		String rest = " " + PROXIMITY_FRAME.matcher(text).replaceAll(" ") + " ";
+		rest = rest.replace(" " + subject + " ", " ");
+		return FILLER.matcher(rest).replaceAll(" ").isBlank();
 	}
 
 	/**
@@ -171,17 +240,24 @@ public final class WorldQueryRecognizer {
 			return Optional.empty();
 		}
 		String raw = query.trim().toLowerCase(Locale.ROOT);
+		// An explicit "structure:" or "ore:" names exactly one thing. If that
+		// thing is unknown the query is refused rather than turned into a
+		// search for something else.
 		if (raw.startsWith("structure:")) {
-			Optional<StructureCatalog.Entry> entry = StructureCatalog.byKey(raw.substring("structure:".length()));
-			if (entry.isPresent()) {
-				return Optional.of(new WorldQuery(WorldQuery.Kind.STRUCTURE, entry.get().key(), text));
+			String name = raw.substring("structure:".length());
+			Optional<StructureCatalog.Entry> entry = StructureCatalog.byKey(name);
+			if (entry.isEmpty()) {
+				entry = StructureCatalog.find(name);
 			}
+			return entry.map(found -> new WorldQuery(WorldQuery.Kind.STRUCTURE, found.key(), text));
 		}
 		if (raw.startsWith("ore:")) {
-			Optional<OreCatalog.Entry> entry = OreCatalog.byKey(raw.substring("ore:".length()));
-			if (entry.isPresent()) {
-				return Optional.of(new WorldQuery(WorldQuery.Kind.ORE, entry.get().key(), text));
+			String name = raw.substring("ore:".length());
+			Optional<OreCatalog.Entry> entry = OreCatalog.byKey(name);
+			if (entry.isEmpty()) {
+				entry = OreCatalog.find(name);
 			}
+			return entry.map(found -> new WorldQuery(WorldQuery.Kind.ORE, found.key(), text));
 		}
 		Optional<WorldQuery> simple = recognizeSimple(text);
 		if (simple.isPresent()) {
@@ -233,6 +309,16 @@ public final class WorldQueryRecognizer {
 			return Optional.of(new WorldQuery(WorldQuery.Kind.ORE, "", text));
 		}
 		return recognizeSearch(text);
+	}
+
+	/**
+	 * Whether the text names a place rather than a thing that can be handed
+	 * over: a structure or a cave. "Find me a village" is a search, not a gift.
+	 */
+	public static boolean namesPlace(String text) {
+		String normalised = normalise(text);
+		return !normalised.isEmpty()
+			&& (StructureCatalog.find(normalised).isPresent() || CAVE_WORD.matcher(normalised).find());
 	}
 
 	/**

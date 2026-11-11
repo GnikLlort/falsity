@@ -143,6 +143,16 @@ class ItemResolverTest {
 	}
 
 	@Test
+	void airAndTheInvisibleLightBlockAreNeverHandedOut() {
+		for (String name : List.of("air", "some air", "block of air", "cave air", "void air", "minecraft:air")) {
+			ItemResolver.Resolution resolution = ItemResolver.resolve(name, CATALOG);
+			assertFalse(resolution.known(), "'" + name + "' resolved to " + resolution.ids());
+		}
+		assertEquals("torch", id("light"), "asking for light means a torch, not the technical light block");
+		assertFalse(ItemResolver.resolve("block of light", CATALOG).known());
+	}
+
+	@Test
 	void technicalItemsAreMarkedRestricted() {
 		assertTrue(ItemResolver.isRestricted("bedrock"));
 		assertTrue(ItemResolver.isRestricted("command_block"));
