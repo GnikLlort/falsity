@@ -7,6 +7,7 @@ import com.falsity.personality.PersonalityProfile;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -91,10 +92,7 @@ public final class OfflineFallback {
 		List<String> recentReplies
 	) {
 		try {
-			List<String> avoid = new ArrayList<>(this.recentLines);
-			if (recentReplies != null) {
-				avoid.addAll(recentReplies);
-			}
+			List<String> avoid = saidRecently(recentReplies);
 			String line = compose(memory, personality, stage, playerMessage, isOwner, avoid);
 			if (line == null || line.isBlank()) {
 				line = "Falsity blinks at you. It does not look away.";
@@ -299,11 +297,7 @@ public final class OfflineFallback {
 	 */
 	public synchronized String unknownItem(String requested, List<String> recentReplies) {
 		String name = echo(requested);
-		List<String> avoid = new ArrayList<>(this.recentLines);
-		if (recentReplies != null) {
-			avoid.addAll(recentReplies);
-		}
-		String line = pickFresh(fill(UNKNOWN_ITEM_LINES, name, "that"), avoid);
+		String line = pickFresh(fill(UNKNOWN_ITEM_LINES, name, "that"), saidRecently(recentReplies));
 		remember(line);
 		return line;
 	}
@@ -319,13 +313,25 @@ public final class OfflineFallback {
 		if (lines == null || lines.isEmpty()) {
 			return plainMessage;
 		}
-		List<String> avoid = new ArrayList<>(this.recentLines);
-		if (recentReplies != null) {
-			avoid.addAll(recentReplies);
-		}
-		String line = pickFresh(lines, avoid);
+		String line = pickFresh(lines, saidRecently(recentReplies));
 		remember(line);
 		return line;
+	}
+
+	/**
+	 * Lines to avoid, most recent first: what this player heard last (if the
+	 * caller knows), then what the fallback itself said last to anyone.
+	 */
+	private List<String> saidRecently(List<String> recentReplies) {
+		List<String> said = new ArrayList<>();
+		if (recentReplies != null) {
+			said.addAll(recentReplies);
+		}
+		Iterator<String> newestFirst = this.recentLines.descendingIterator();
+		while (newestFirst.hasNext()) {
+			said.add(newestFirst.next());
+		}
+		return said;
 	}
 
 	private void remember(String line) {
@@ -339,18 +345,35 @@ public final class OfflineFallback {
 		return lines.get(this.random.nextInt(lines.size()));
 	}
 
-	/** Picks a line that was not used recently; falls back to any line. */
-	private String pickFresh(List<String> lines, List<String> avoid) {
+	/**
+	 * Picks a line that was not said recently. {@code saidRecently} is ordered
+	 * most recent first. When every candidate has been said, the one said
+	 * longest ago is used, so the same line never comes twice in a row as long
+	 * as there is a second one to say.
+	 */
+	private String pickFresh(List<String> lines, List<String> saidRecently) {
 		if (lines == null || lines.isEmpty()) {
-			return pick(QUIET_LINES);
+			return pickFresh(QUIET_LINES, saidRecently);
 		}
 		List<String> fresh = new ArrayList<>();
 		for (String line : lines) {
-			if (!avoid.contains(line)) {
+			if (!saidRecently.contains(line)) {
 				fresh.add(line);
 			}
 		}
-		return pick(fresh.isEmpty() ? lines : fresh);
+		if (!fresh.isEmpty()) {
+			return pick(fresh);
+		}
+		String stalest = lines.get(0);
+		int stalestAge = -1;
+		for (String line : lines) {
+			int age = saidRecently.indexOf(line);
+			if (age > stalestAge) {
+				stalestAge = age;
+				stalest = line;
+			}
+		}
+		return stalest;
 	}
 
 	private static List<String> withName(List<String> lines, PlayerMemory memory) {
