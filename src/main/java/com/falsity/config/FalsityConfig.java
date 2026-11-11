@@ -303,7 +303,10 @@ public final class FalsityConfig {
 	public static final class World {
 		/** Master switch for world questions. */
 		public boolean enabled = true;
-		/** Whether Falsity may say coordinates. Also off when the reducedDebugInfo game rule is on. */
+		/**
+		 * Whether Falsity may say coordinates. Coordinates are also left out
+		 * wherever the {@code reducedDebugInfo} game rule is on, whatever this says.
+		 */
 		public boolean shareCoordinates = true;
 		/** Who may ask Falsity to find structures, ores and caves. */
 		public ItemPermissionMode locatePermission = ItemPermissionMode.OWNER;

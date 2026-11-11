@@ -24,6 +24,7 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.gamerules.GameRules;
 import net.minecraft.world.phys.Vec3;
 
 /**
@@ -119,6 +120,43 @@ public class FalsityAssistanceGameTest {
 			result.message().contains("x=" + pos.getX() + ",") && result.message().contains("y=" + pos.getY() + ",")
 				&& result.message().contains("z=" + pos.getZ()),
 			"The answer should be the player's real position " + pos + ": " + result.message());
+
+		helper.succeed();
+	}
+
+	@GameTest
+	public void coordinatesStayHiddenWhereTheWorldHidesThem(final GameTestHelper helper) {
+		Scene scene = scene(helper, "falsity_hidden");
+		BlockPos pos = scene.player().blockPosition();
+		GameRules rules = scene.level().getGameRules();
+		boolean before = rules.get(GameRules.REDUCED_DEBUG_INFO);
+
+		// The level is shared with every other test, so the rule is switched on,
+		// used and put back without letting a tick pass in between.
+		ActionResult hidden;
+		String hiddenFacts;
+		rules.set(GameRules.REDUCED_DEBUG_INFO, true, scene.level().getServer());
+		try {
+			hidden = scene.run("where am I?");
+			hiddenFacts = WorldService.facts(scene.player(), scene.falsity(), FalsityMod.config());
+		} finally {
+			rules.set(GameRules.REDUCED_DEBUG_INFO, before, scene.level().getServer());
+		}
+
+		helper.assertTrue(hidden.success(), "The question is still answered: " + hidden.message());
+		helper.assertFalse(hidden.message().contains("x="),
+			"With reducedDebugInfo on, Falsity must not recite the position: " + hidden.message());
+		helper.assertTrue(hidden.message().contains("not allowed to share exact coordinates"),
+			"It says why instead: " + hidden.message());
+		helper.assertFalse(hiddenFacts.contains("x="),
+			"The model is not handed the position either, so it cannot leak it: " + hiddenFacts);
+		helper.assertTrue(hiddenFacts.startsWith("You and the player are in "), hiddenFacts);
+
+		if (!before) {
+			ActionResult shown = scene.run("where am I?");
+			helper.assertTrue(shown.message().contains("x=" + pos.getX() + ","),
+				"With the rule off again the position is back: " + shown.message());
+		}
 
 		helper.succeed();
 	}

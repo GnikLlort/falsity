@@ -19,6 +19,7 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.gamerules.GameRules;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.levelgen.structure.Structure;
 
@@ -66,15 +67,26 @@ public final class WorldService {
 			level.getDefaultClockTime(),
 			level.isRaining(),
 			level.isThundering(),
-			config.world.shareCoordinates
+			mayShareCoordinates(level, config)
 		);
+	}
+
+	/**
+	 * Whether an answer given in {@code level} may contain coordinates. The
+	 * server's own switch decides first. On top of that, a world that hides
+	 * coordinates on the debug screen (the {@code reducedDebugInfo} game rule)
+	 * does not get them from Falsity either: that rule exists so players cannot
+	 * read their position, and a companion that recites it would undo it.
+	 */
+	public static boolean mayShareCoordinates(ServerLevel level, FalsityConfig config) {
+		return config.world.shareCoordinates && !level.getGameRules().get(GameRules.REDUCED_DEBUG_INFO);
 	}
 
 	/** Answers a world question for a player standing in {@code level}. */
 	public static String answer(ServerLevel level, Player player, FalsityEntity falsity, WorldQuery query, FalsityConfig config) {
 		BlockPos pos = player.blockPosition();
 		String dimension = dimensionPath(level);
-		boolean share = config.world.shareCoordinates;
+		boolean share = mayShareCoordinates(level, config);
 
 		return switch (query.kind()) {
 			case POSITION -> WorldAnswers.position(pos.getX(), pos.getY(), pos.getZ(), dimension, share);
@@ -160,7 +172,8 @@ public final class WorldService {
 			return WorldAnswers.structureNotFound(structure, radiusChunks * 16);
 		}
 		BlockPos where = found.getFirst();
-		return WorldAnswers.structureFound(structure, pos.getX(), pos.getZ(), where.getX(), where.getZ(), config.world.shareCoordinates);
+		return WorldAnswers.structureFound(
+			structure, pos.getX(), pos.getZ(), where.getX(), where.getZ(), mayShareCoordinates(level, config));
 	}
 
 	/**
