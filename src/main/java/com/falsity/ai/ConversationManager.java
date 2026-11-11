@@ -15,6 +15,7 @@ import com.falsity.entity.FalsityEntity;
 import com.falsity.horror.HorrorEvent;
 import com.falsity.horror.HorrorManager;
 import com.falsity.horror.HorrorStage;
+import com.falsity.memory.FactExtractor;
 import com.falsity.memory.MemoryManager;
 import com.falsity.memory.MemorySummarizer;
 import com.falsity.memory.PlayerMemory;
@@ -618,7 +619,7 @@ public final class ConversationManager {
 		turn.memory.recordConversation(turn.message, reply, config.memory.maxRecentInteractions);
 		// Kind words, harsh words or neither: how the player speaks to Falsity is part of the relationship.
 		turn.memory.recordTreatment(OfflineFallback.treatmentOf(turn.message));
-		extractFact(turn.memory, turn.message);
+		FactExtractor.extract(turn.memory, turn.message, config.memory.maxStoredFacts);
 		this.memories.save(playerUuid);
 		this.personalities.applyEvent(playerUuid, playerName, PersonalityProfile.Event.CONVERSATION);
 		this.horror.recordInteraction(playerUuid, playerName);
@@ -686,40 +687,6 @@ public final class ConversationManager {
 	public static void say(Player player, FalsityEntity falsity, String line) {
 		String name = falsity.getName().getString();
 		player.sendSystemMessage(Component.literal("<" + name + "> " + line));
-	}
-
-	/**
-	 * Extracts simple durable facts from player messages ("my name is X",
-	 * "i like Y", "remember Z", "my favourite block is X"). Local and
-	 * deterministic; no API involved.
-	 */
-	static void extractFact(PlayerMemory memory, String playerMessage) {
-		if (memory == null || playerMessage == null) {
-			return;
-		}
-		String message = playerMessage.trim();
-		String lower = message.toLowerCase();
-		if (lower.startsWith("my name is ")) {
-			String name = message.substring("my name is ".length()).trim();
-			if (!name.isEmpty() && name.length() <= 32) {
-				memory.recordFact("Player's name is " + name, 50);
-			}
-		} else if (lower.startsWith("i like ") || lower.startsWith("i love ") || lower.startsWith("i hate ")) {
-			if (message.length() <= 80) {
-				memory.recordFact("Player said: " + message, 50);
-			}
-		} else if (lower.startsWith("my favourite ") || lower.startsWith("my favorite ")) {
-			// "my favourite block is diamond" -> a durable preference.
-			String detail = message.substring(lower.startsWith("my favourite ") ? "my favourite ".length() : "my favorite ".length()).trim();
-			if (!detail.isEmpty() && detail.length() <= 80) {
-				memory.recordFact("Player's favourite is " + detail, 50);
-			}
-		} else if (lower.startsWith("remember ")) {
-			String toRemember = message.substring("remember ".length()).trim();
-			if (!toRemember.isEmpty() && toRemember.length() <= 80) {
-				memory.recordFact("Player asked Falsity to remember: " + toRemember, 50);
-			}
-		}
 	}
 
 	/**

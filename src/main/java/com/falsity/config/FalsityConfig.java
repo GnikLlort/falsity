@@ -163,6 +163,10 @@ public final class FalsityConfig {
 	 * <p>These are the values a brand-new Falsity starts with. Once a player
 	 * has met Falsity, the live values evolve with interactions and are
 	 * persisted per player; editing these only affects new relationships.
+	 *
+	 * <p>These numbers are how Falsity feels about one player. Who Falsity is
+	 * and how it talks is a text of its own, in
+	 * {@code config/falsity/personality.txt}.
 	 */
 	public static final class Personality {
 		public int curiosity = 70;
@@ -198,7 +202,11 @@ public final class FalsityConfig {
 		public int maxStage = 1;
 		/** Whether Falsity may stop and stare at its owner (harmless). */
 		public boolean allowStaring = true;
-		/** Whether Falsity may use subtly unsettling offline lines. */
+		/**
+		 * Whether what Falsity says may turn unsettling as the stage rises,
+		 * with Groq or without. Off keeps its voice at the first stage; the
+		 * stage itself, tension and staring are not affected.
+		 */
 		public boolean allowUnsettlingLines = true;
 	}
 

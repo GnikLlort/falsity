@@ -8,7 +8,9 @@ import com.falsity.ai.ConversationManager;
 import com.falsity.building.BuildManager;
 import com.falsity.entity.FalsityEntity;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -117,6 +119,13 @@ public final class NaturalChatListener {
 		if (!addressed && !contextual) {
 			return;
 		}
+		if (!addressed && ChatDetector.addressesSomeoneElse(raw, otherPlayerNames(sender, falsityName))) {
+			// The player has turned to somebody else. That is not a follow-up, and it
+			// ends the conversation with Falsity until Falsity is named again.
+			FalsityMod.contexts().clear(sender.getUUID());
+			FalsityMod.debug("Left a message from {} alone: it was said to another player.", sender.getName().getString());
+			return;
+		}
 
 		if (raw.length() > FalsityMod.config().chat.maxMessageLength) {
 			sender.sendSystemMessage(Component.translatable("message.falsity.too_long"));
@@ -146,6 +155,22 @@ public final class NaturalChatListener {
 				// ACCEPTED: answered, or on its way. QUEUED: waiting its turn; the reply follows.
 			}
 		}
+	}
+
+	/** The names of everyone else online, so a message called out to one of them is not taken as a follow-up. */
+	private static List<String> otherPlayerNames(ServerPlayer sender, String falsityName) {
+		List<String> names = new ArrayList<>();
+		try {
+			for (ServerPlayer other : sender.level().getServer().getPlayerList().getPlayers()) {
+				String name = other.getName().getString();
+				if (other != sender && !name.equalsIgnoreCase(falsityName)) {
+					names.add(name);
+				}
+			}
+		} catch (RuntimeException exception) {
+			// Without the list nothing is filtered, which is how it behaved before.
+		}
+		return names;
 	}
 
 	/** Tells a player, at most every half minute, that their Falsity is too far away to hear. */
