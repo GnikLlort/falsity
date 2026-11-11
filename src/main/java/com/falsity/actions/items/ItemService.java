@@ -41,7 +41,7 @@ public final class ItemService {
 		FalsityConfig config = context.config();
 		ServerPlayer player = context.player();
 
-		if (!config.items.enabled) {
+		if (!config.items.enabled || !config.autonomy.resourceAssistance) {
 			return ActionResult.failure("I'm not allowed to conjure items right now.");
 		}
 		if (!mayUse(player, context.falsity(), config)) {

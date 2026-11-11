@@ -8,6 +8,7 @@ import com.falsity.actions.ActionResult;
 import com.falsity.actions.ActionType;
 import com.falsity.actions.IntentRecognizer;
 import com.falsity.ai.ConversationManager;
+import com.falsity.config.FalsityConfig;
 import com.falsity.entity.FalsityEntity;
 import com.falsity.world.WorldAnswers;
 import com.falsity.world.WorldService;
@@ -157,6 +158,32 @@ public class FalsityAssistanceGameTest {
 			helper.assertTrue(shown.message().contains("x=" + pos.getX() + ","),
 				"With the rule off again the position is back: " + shown.message());
 		}
+
+		helper.succeed();
+	}
+
+	@GameTest
+	public void helpThatIsSwitchedOffIsDeclinedInWords(final GameTestHelper helper) {
+		Scene scene = scene(helper, "falsity_switches");
+		FalsityConfig off = new FalsityConfig();
+		off.autonomy.resourceAssistance = false;
+		off.autonomy.exploration = false;
+		ActionContext declined = new ActionContext(scene.player(), scene.falsity(), scene.level(), off);
+
+		ActionResult items = FalsityMod.actions().execute(declined, IntentRecognizer.recognize("give me 3 torches").orElseThrow());
+		helper.assertFalse(items.success(), "With autonomy.resourceAssistance off, items are refused: " + items.message());
+		helper.assertFalse(items.message().isBlank(), "and the refusal is said");
+		helper.assertTrue(total(scene.player()) == 0, "Nothing may be created by a refused request");
+
+		ActionResult watch = FalsityMod.actions().execute(declined, IntentRecognizer.recognize("what's out there").orElseThrow());
+		helper.assertFalse(watch.success(), "With autonomy.exploration off, Falsity does not report threats: " + watch.message());
+		helper.assertFalse(watch.message().isBlank(), "and the refusal is said");
+
+		ActionResult given = scene.run("give me 3 torches");
+		helper.assertTrue(given.success(), "With the default settings the same request works: " + given.message());
+		helper.assertTrue(count(scene.player(), Items.TORCH) == 3, "Exactly three torches: " + count(scene.player(), Items.TORCH));
+		ActionResult watching = scene.run("what's out there");
+		helper.assertTrue(watching.success(), "and so does keeping watch: " + watching.message());
 
 		helper.succeed();
 	}

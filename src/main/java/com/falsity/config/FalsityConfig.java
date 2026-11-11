@@ -275,18 +275,19 @@ public final class FalsityConfig {
 	}
 
 	/**
-	 * Autonomous behaviour switches.
-	 *
-	 * <p>Each is off by default where it could change the world in a way the
-	 * player did not ask for. Combat assistance is opt-in because it makes
-	 * Falsity attack hostile mobs.
+	 * Switches for the kinds of help Falsity gives. All are on by default; each
+	 * one, when off, makes Falsity decline that kind of request in words rather
+	 * than ignore it.
 	 */
 	public static final class Autonomy {
-		/** Exploration: identify nearby threats and landmarks when asked. */
+		/** Keeping watch: report hostile mobs nearby when asked ("what's out there?"). */
 		public boolean exploration = true;
-		/** Combat: help attack hostile mobs near the owner. */
+		/** Combat: protect the owner and help attack hostile mobs when asked. */
 		public boolean combatAssistance = true;
-		/** Resource assistance: collect or retrieve permitted items. */
+		/**
+		 * Handing over items when asked. Off refuses every item request, the
+		 * same as {@code items.enabled} being off.
+		 */
 		public boolean resourceAssistance = true;
 	}
 
