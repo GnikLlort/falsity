@@ -50,7 +50,13 @@ jobs:
           set -o pipefail
           ./gradlew compileClientJava --stacktrace 2>&1 | tee -a "$GITHUB_WORKSPACE/build.log"
 
+      # GROQ_API_KEY is optional. With a repository secret of that name the two
+      # tests in GroqLiveTest ask the real Groq service; without it (and on pull
+      # requests from forks, which never see secrets) they are reported as
+      # skipped. Nothing else in the build uses the key.
       - name: Run unit tests
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
           set -o pipefail
           ./gradlew test --stacktrace 2>&1 | tee -a "$GITHUB_WORKSPACE/build.log"
@@ -101,6 +107,9 @@ jobs:
             echo
             echo "== failed unit tests =="
             grep -E "^(FAILED|  )" build.log | grep -A1 -E "^FAILED" | head -40 || echo "none"
+            echo
+            echo "== unit tests that did not run =="
+            grep -E "^(SKIPPED|  )" build.log | grep -A1 -E "^SKIPPED" | head -20 || echo "none"
             echo
             echo "== game tests =="
             grep -i -E "tests are now running|GAME TESTS COMPLETE|required tests|tests failed" build.log | head -20

@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Print the names of failing unit tests from Gradle's JUnit XML reports.
+"""Print the names of failing and skipped unit tests from Gradle's JUnit XML reports.
 
 Gradle's console output says "81 tests completed, 2 failed" without saying
 which two. CI runs this after the test task so the failure is named in the
 build log and in the commit comment, instead of only in a report artefact.
+
+Skipped tests are named too, with their reason when the report has one. A test
+that did not run has not passed, and the summary should not read as if it had:
+the live Groq tests, for example, are skipped whenever no API key is available.
 
 Usage: python3 scripts/report_test_failures.py build/test-results/test
 """
@@ -28,6 +32,7 @@ def main(argv: list[str]) -> int:
         return 0
 
     failures = 0
+    skipped = 0
     for report in reports:
         try:
             root = ET.parse(report).getroot()
@@ -36,6 +41,14 @@ def main(argv: list[str]) -> int:
             continue
 
         for case in root.iter("testcase"):
+            skip = case.find("skipped")
+            if skip is not None:
+                skipped += 1
+                print(f"SKIPPED {case.get('classname')}.{case.get('name')}")
+                reason = (skip.get("message") or skip.text or "").replace("\n", " ").strip()
+                # Always two lines per skipped test, so the CI summary can pair them.
+                print(f"  {reason[:300] if reason else '(the report gives no reason)'}")
+                continue
             for kind in ("failure", "error"):
                 node = case.find(kind)
                 if node is None:
@@ -52,6 +65,8 @@ def main(argv: list[str]) -> int:
 
     if failures:
         print(f"{failures} failing test(s).")
+    elif skipped:
+        print(f"No unit test failed; {skipped} did not run (listed above as SKIPPED).")
     else:
         print("All unit tests passed.")
 
