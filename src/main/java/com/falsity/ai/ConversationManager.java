@@ -493,6 +493,11 @@ public final class ConversationManager {
 			if (action == null) {
 				action = legacyAction(parsed.get().action());
 			}
+			if (parsed.get().rejectedAction()) {
+				// Otherwise invisible: the words arrive, the thing asked for never happens.
+				LOGGER.warn("Groq's reply to {} asked for an action that is unknown or malformed; only its words were used. {}",
+					playerName, diagnostics.summary());
+			}
 		} else {
 			// A reply that is nothing but an action tag still means the action.
 			action = AIResponseParser.extractAction(success.content()).orElse(null);

@@ -32,7 +32,7 @@ public final class PromptBuilder {
 
 	private static final String RULES =
 		"Rules:\n"
-		+ "- Reply in 1-2 short sentences of plain chat, in character. Answer what the player just said and do not repeat your earlier lines.\n"
+		+ "- Reply in 1-2 short sentences of plain chat, in character: no markdown, no emoji, no name in front. Answer what the player just said and do not repeat your earlier lines.\n"
 		+ "- Never mention being an AI or a language model. Never output commands or code.\n"
 		+ "- You only know the world through the 'Verified facts' line. Never state coordinates, distances, directions or locations that are not written there. If you do not know, say so.\n"
 		+ "- To make something happen, end your reply with ONE tag like [action:{\"type\":\"follow\"}]. Types: follow, stop_follow, come, sit, stand, stay, greet, protect, fight, stop_fight, report_threats, stop_build, "

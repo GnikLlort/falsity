@@ -41,19 +41,25 @@ public record ActionRequest(ActionType type, Map<String, Object> args) {
 		return value == null || value.isBlank() ? defaultValue : value;
 	}
 
+	/**
+	 * A whole-number argument. JSON has only one kind of number, so a count
+	 * that arrives as {@code 32.0} (or as the text {@code "32"}) is still 32;
+	 * a fraction is rounded to the nearest whole number.
+	 */
 	public int argInt(String key, int defaultValue) {
-		String value = arg(key);
-		if (value == null || value.isBlank()) {
+		double value = argDouble(key, Double.NaN);
+		if (Double.isNaN(value) || Double.isInfinite(value)) {
 			return defaultValue;
 		}
-		try {
-			return Integer.parseInt(value.trim());
-		} catch (NumberFormatException malformed) {
-			return defaultValue;
-		}
+		long rounded = Math.round(value);
+		return (int) Math.max(Integer.MIN_VALUE, Math.min(Integer.MAX_VALUE, rounded));
 	}
 
 	public double argDouble(String key, double defaultValue) {
+		Object raw = this.args.get(key);
+		if (raw instanceof Number number) {
+			return number.doubleValue();
+		}
 		String value = arg(key);
 		if (value == null || value.isBlank()) {
 			return defaultValue;

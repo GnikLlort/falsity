@@ -154,7 +154,8 @@ public class FalsityMod implements ModInitializer {
 		ApiKeyProvider.Located key = new ApiKeyProvider().locate(config, gameDir);
 		if (!key.present()) {
 			return "No Groq API key was found" + (key.note().isEmpty() ? "" : " (" + key.note() + ")")
-				+ "; Falsity will use its offline lines. Set GROQ_API_KEY, secrets.json or groq.apiKey.";
+				+ "; Falsity will use its offline lines. Set the GROQ_API_KEY environment variable, or put the key in "
+				+ key.secretsPath() + ", or in groq.apiKey in config/falsity.json.";
 		}
 		return "Groq is configured (model " + config.groq.model + ", key from " + key.source().description()
 			+ ") but not yet verified; run /falsity ai test to check it, and /falsity ai status to see results.";

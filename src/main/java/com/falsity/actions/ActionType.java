@@ -77,6 +77,11 @@ public enum ActionType {
 		return args.keySet().stream().allMatch(this::allowsArg);
 	}
 
+	/** Whether the action needs to be told something (an item, a place) to mean anything. */
+	public boolean takesArgs() {
+		return !this.allowedArgs.isEmpty();
+	}
+
 	/** Whether this type is a real action rather than the "nothing" placeholder. */
 	public boolean isReal() {
 		return this != NONE;

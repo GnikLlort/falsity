@@ -380,4 +380,39 @@ class GroqClientDiagnosticsTest {
 
 		assertEquals("chatcmpl-9", GroqClient.parseResponse("{\"id\":\"chatcmpl-9\",\"choices\":[]}").groqRequestId());
 	}
+
+	@Test
+	void aKeyThatCannotBeSentIsRefusedWithoutBeingSentOrShown() {
+		for (String broken : List.of(
+			"gsk_abcdefgh ijklmnop",
+			"gsk_abcdefgh\nijklmnop",
+			"gsk_abcdefgh\tijklmnop",
+			"gsk_abcdefgh\u00E9ijklmnop",
+			"gsk_abcdefgh\u200Bijklmnop",
+			"\u201Cgsk_abcdefghijklmnop\u201D"
+		)) {
+			Script script = new Script().then(200, reply("Hi!", "stop"));
+			Request request = new Request(
+				ENDPOINT, broken, PLAIN_MODEL, List.of(new GroqClient.ChatMessage("user", "Hello")), 0.7, 150, 15, 30, "", 0);
+
+			Exchange exchange = client(script).exchange(request).join();
+
+			assertTrue(exchange.result() instanceof GroqClient.Result.Failed, broken);
+			assertEquals(Failure.UNAUTHORIZED, exchange.diagnostics().failure(), "it is the key that is wrong, not the network");
+			assertTrue(script.bodies.isEmpty(), "nothing is sent with a key that cannot be a key");
+			assertTrue(exchange.diagnostics().detail().contains("API key"), exchange.diagnostics().detail());
+			assertFalse(exchange.diagnostics().summary().contains("abcdefgh"), exchange.diagnostics().summary());
+			assertFalse(exchange.diagnostics().summary().contains("ijklmnop"), exchange.diagnostics().summary());
+		}
+	}
+
+	@Test
+	void anOrdinaryKeyIsSendable() {
+		assertTrue(GroqClient.isSendableKey(KEY));
+		assertTrue(GroqClient.isSendableKey("gsk_AZaz09-_.~+/="));
+		assertFalse(GroqClient.isSendableKey(""));
+		assertFalse(GroqClient.isSendableKey(null));
+		assertFalse(GroqClient.isSendableKey("gsk_abc def"));
+		assertFalse(GroqClient.isSendableKey("gsk_abc\u007F"));
+	}
 }

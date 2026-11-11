@@ -74,14 +74,17 @@ public final class AiStatusReport {
 			return "API key: found in " + key.source().description() + " (" + key.key().length() + " characters; not shown)";
 		}
 		String note = key.note().isEmpty() ? "" : " Note: " + key.note() + ".";
-		return "API key: not found. Set the GROQ_API_KEY environment variable, or put it in secrets.json "
-			+ "in the game directory, or in groq.apiKey." + note;
+		String secrets = key.secretsPath().isEmpty() ? "secrets.json in the game directory" : key.secretsPath();
+		return "API key: not found. Set the GROQ_API_KEY environment variable, or put it in " + secrets
+			+ ", or in groq.apiKey in config/falsity.json." + note;
 	}
 
 	/** The result of {@code /falsity ai test}, in one line. */
 	public static String testResult(GroqClient.Exchange exchange, Throwable error) {
 		if (error != null || exchange == null) {
-			return "Groq test failed before a request could be made: " + error;
+			// Only the kind of error: its message is not known to be free of the key.
+			return "Groq test failed before a request could be made"
+				+ (error == null ? "." : " (" + error.getClass().getSimpleName() + "). See the server log.");
 		}
 		GroqClient.Diagnostics diagnostics = exchange.diagnostics();
 		if (exchange.result() instanceof GroqClient.Result.Success success) {
@@ -101,7 +104,8 @@ public final class AiStatusReport {
 			return "";
 		}
 		return switch (failure) {
-			case UNAUTHORIZED -> "Groq rejected the API key: check GROQ_API_KEY, secrets.json or groq.apiKey.";
+			case UNAUTHORIZED -> "The API key was not accepted: create a new one at console.groq.com/keys and put it in "
+				+ "GROQ_API_KEY, secrets.json or groq.apiKey.";
 			case MODEL_UNAVAILABLE -> "The model in groq.model is not available to this key: pick another model.";
 			case RATE_LIMITED -> "Groq or the local limit (conversation.maxRequestsPerMinute) is rate limiting requests.";
 			case TIMEOUT -> "The request timed out: check the network or raise groq.timeoutSeconds.";

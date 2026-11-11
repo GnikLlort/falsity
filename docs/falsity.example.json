@@ -1,16 +1,11 @@
 {
+  "configVersion": 2,
   "debugLogging": false,
   "companion": {
     "followOwner": true,
     "followStartDistance": 6.0,
     "teleportDistance": 24.0,
     "followSpeed": 1.1
-  },
-  "chat": {
-    "enabled": true,
-    "contextTimeoutSeconds": 120,
-    "maxConversationDistance": 32.0,
-    "maxMessageLength": 256
   },
   "groq": {
     "enabled": true,
@@ -19,32 +14,16 @@
     "endpoint": "https://api.groq.com/openai/v1/chat/completions",
     "timeoutSeconds": 15,
     "maxTokens": 150,
-    "temperature": 0.7
+    "temperature": 0.7,
+    "reasoningEffort": "low",
+    "reasoningHeadroomTokens": 512,
+    "historyTurns": 6
   },
   "conversation": {
     "enabled": true,
-    "cooldownSeconds": 10,
+    "cooldownSeconds": 3,
     "maxRequestsPerMinute": 10,
     "maxMessageLength": 256
-  },
-  "items": {
-    "enabled": true,
-    "permissionMode": "OWNER",
-    "maxPerRequest": 64,
-    "cooldownSeconds": 15,
-    "confirmAboveCount": 128
-  },
-  "building": {
-    "enabled": true,
-    "maxDimension": 32,
-    "maxBlocks": 500,
-    "blockPlacementsPerTick": 6,
-    "requireConfirmation": true,
-    "confirmAboveBlocks": 150,
-    "inventoryBased": true,
-    "creativeGeneration": false,
-    "maxDistanceFromPlayer": 48,
-    "progressUpdateTicks": 100
   },
   "memory": {
     "maxStoredFacts": 50,
@@ -70,5 +49,44 @@
     "maxStage": 1,
     "allowStaring": true,
     "allowUnsettlingLines": true
+  },
+  "chat": {
+    "enabled": true,
+    "contextTimeoutSeconds": 120,
+    "maxConversationDistance": 32.0,
+    "maxMessageLength": 256
+  },
+  "items": {
+    "enabled": true,
+    "permissionMode": "OWNER",
+    "maxPerRequest": 64,
+    "maxTypesPerRequest": 8,
+    "cooldownSeconds": 15,
+    "confirmAboveCount": 128
+  },
+  "building": {
+    "enabled": true,
+    "maxDimension": 32,
+    "maxBlocks": 500,
+    "blockPlacementsPerTick": 6,
+    "requireConfirmation": true,
+    "confirmAboveBlocks": 150,
+    "inventoryBased": true,
+    "creativeGeneration": false,
+    "maxDistanceFromPlayer": 48,
+    "progressUpdateTicks": 100
+  },
+  "autonomy": {
+    "exploration": true,
+    "combatAssistance": true,
+    "resourceAssistance": true
+  },
+  "world": {
+    "enabled": true,
+    "shareCoordinates": true,
+    "locatePermission": "OWNER",
+    "structureSearchRadiusChunks": 64,
+    "scanRadius": 24,
+    "locateCooldownSeconds": 5
   }
 }

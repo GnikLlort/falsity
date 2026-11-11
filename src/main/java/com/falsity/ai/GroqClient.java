@@ -325,6 +325,13 @@ public final class GroqClient {
 			return CompletableFuture.completedFuture(finish(failed(
 				requestId, model, startNanos, 0, 0, Failure.NO_KEY, "no API key configured", 0L, null)));
 		}
+		if (!isSendableKey(request.apiKey())) {
+			// Sending it would fail inside the HTTP client with a message that quotes the key.
+			return CompletableFuture.completedFuture(finish(failed(
+				requestId, model, startNanos, 0, 0, Failure.UNAUTHORIZED,
+				"the API key contains a space, a line break or another character a key cannot have; paste it again",
+				0L, null)));
+		}
 		if (!this.rateLimiter.tryAcquire(request.maxRequestsPerMinute())) {
 			String detail = "local limit of " + Math.max(1, request.maxRequestsPerMinute())
 				+ " requests per minute reached (conversation.maxRequestsPerMinute)";
@@ -476,6 +483,20 @@ public final class GroqClient {
 
 	private static long elapsedMillis(long startNanos) {
 		return Math.max(0L, (System.nanoTime() - startNanos) / 1_000_000L);
+	}
+
+	/** Whether the key is made of visible ASCII only, the one form that can travel in a header. */
+	static boolean isSendableKey(String apiKey) {
+		if (apiKey == null || apiKey.isEmpty()) {
+			return false;
+		}
+		for (int index = 0; index < apiKey.length(); index++) {
+			char character = apiKey.charAt(index);
+			if (character <= ' ' || character >= 0x7F) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	private static Failure classifyStatus(int status, String body) {

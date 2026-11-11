@@ -427,7 +427,26 @@ public final class FalsityConfig {
 			throw new JsonSyntaxException("Configuration is empty");
 		}
 
+		parsed.requireSections();
 		return parsed;
+	}
+
+	/**
+	 * A section written as {@code "groq": null} would leave that block missing
+	 * and break everything that reads it. Such a file is rejected as a whole,
+	 * the same way a file with a syntax error is.
+	 */
+	private void requireSections() {
+		try {
+			for (Field field : FalsityConfig.class.getDeclaredFields()) {
+				int modifiers = field.getModifiers();
+				if (!Modifier.isStatic(modifiers) && Modifier.isFinal(modifiers) && field.get(this) == null) {
+					throw new JsonSyntaxException("The \"" + field.getName() + "\" section must be an object, not null");
+				}
+			}
+		} catch (IllegalAccessException exception) {
+			throw new IllegalStateException("Could not check the settings", exception);
+		}
 	}
 
 	/**
