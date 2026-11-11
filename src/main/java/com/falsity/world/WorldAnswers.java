@@ -247,6 +247,12 @@ public final class WorldAnswers {
 		return builder.toString().trim();
 	}
 
+	/** Health at or below this share of the maximum is worth telling the model about. */
+	static final float LOW_HEALTH = 0.4F;
+
+	/** How many different kinds of hostile mob are named. */
+	static final int MAX_HOSTILE_KINDS = 4;
+
 	/**
 	 * The line of checked facts handed to the model with every message, so it
 	 * can talk about where the player is without inventing anything.
@@ -269,6 +275,42 @@ public final class WorldAnswers {
 			builder.append(thundering ? ", thunderstorm." : raining ? ", raining." : ", clear sky.");
 		}
 		return builder.toString();
+	}
+
+	/**
+	 * What the model may know about danger right now, to follow the line of
+	 * facts: the player's health when it is low, and the hostile mobs close
+	 * by. Empty when there is nothing to worry about, so an ordinary moment
+	 * costs nothing.
+	 *
+	 * @param health    the player's health, in half hearts
+	 * @param maxHealth the player's full health, in half hearts
+	 * @param hostiles  the names of nearby hostile mobs, nearest first, one entry per mob
+	 * @param radius    how far, in blocks, the mobs were looked for
+	 */
+	public static String danger(float health, float maxHealth, List<String> hostiles, int radius) {
+		StringBuilder builder = new StringBuilder();
+		if (maxHealth > 0.0F && health > 0.0F && health <= maxHealth * LOW_HEALTH) {
+			builder.append(" The player is hurt: ").append(hearts(health)).append(" of ").append(hearts(maxHealth)).append(" hearts left.");
+		}
+		if (hostiles != null && !hostiles.isEmpty()) {
+			List<String> kinds = new ArrayList<>();
+			for (String name : hostiles) {
+				String kind = name == null || name.isBlank() ? "hostile mob" : words(name);
+				if (!kinds.contains(kind) && kinds.size() < MAX_HOSTILE_KINDS) {
+					kinds.add(kind);
+				}
+			}
+			builder.append(" Hostile mobs within ").append(radius).append(" blocks: ").append(hostiles.size())
+				.append(" (").append(String.join(", ", kinds)).append(").");
+		}
+		return builder.toString();
+	}
+
+	/** Health in hearts: whole where it is whole, otherwise to the half. */
+	private static String hearts(float halfHearts) {
+		long halves = Math.max(1L, Math.round((double) halfHearts));
+		return halves % 2L == 0L ? Long.toString(halves / 2L) : (halves / 2L) + ".5";
 	}
 
 	private static String blocksInRange(int blocks, int radius) {

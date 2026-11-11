@@ -297,7 +297,14 @@ public class FalsityPersonalityGameTest {
 	@GameTest
 	public void unsettlingSwitchKeepsTheVoiceNormalAndTheStageWhereItWas(final GameTestHelper helper) {
 		Scene scene = scene(helper, "falsity_p_switch", true, 1L);
-		scene.horror().setStage(scene.uuid(), scene.name(), HorrorStage.STRANGE.ordinal());
+		// Reached the way the horror system reaches it, through tension: a stage that is only
+		// set by hand is worked out again from tension at the next interaction.
+		for (int index = 0; index < 25; index++) {
+			scene.horror().recordInteraction(scene.uuid(), scene.name());
+		}
+		helper.assertTrue(scene.horror().stageFor(scene.uuid(), scene.name()) == HorrorStage.STRANGE,
+			"Twenty-five interactions should reach Strange, was " + scene.horror().stageFor(scene.uuid(), scene.name()));
+		double tension = scene.horror().tensionFor(scene.uuid(), scene.name());
 		scene.config().horror.allowUnsettlingLines = false;
 
 		scene.say("how was your day?");
@@ -308,6 +315,8 @@ public class FalsityPersonalityGameTest {
 		helper.assertTrue(!system.contains("unsettling"), "Nothing unsettling should be asked for: " + system);
 		helper.assertTrue(scene.horror().stageFor(scene.uuid(), scene.name()) == HorrorStage.STRANGE,
 			"The stage itself must not move, was " + scene.horror().stageFor(scene.uuid(), scene.name()));
+		helper.assertTrue(scene.horror().tensionFor(scene.uuid(), scene.name()) >= tension,
+			"Tension must not be lost, was " + tension + " and is " + scene.horror().tensionFor(scene.uuid(), scene.name()));
 		helper.succeed();
 	}
 
@@ -418,6 +427,26 @@ public class FalsityPersonalityGameTest {
 		String system = scene.groq().system(0);
 		helper.assertTrue(system.startsWith("You are Mimi, "), "A renamed companion should be told its name: " + system);
 		helper.assertTrue(system.endsWith("Now answer the player's next message as Mimi."), "And answer under it: " + system);
+		helper.succeed();
+	}
+
+	// ---- world ----------------------------------------------------------------------
+
+	@GameTest
+	public void hurtPlayerIsAmongTheVerifiedFacts(final GameTestHelper helper) {
+		Scene scene = scene(helper, "falsity_p_hurt", true, 1L);
+
+		String healthy = WorldService.facts(scene.player(), scene.falsity(), scene.config());
+		helper.assertTrue(healthy.startsWith("You and the player are in "), "The facts should still open with where the player is: " + healthy);
+		helper.assertTrue(!healthy.contains("The player is hurt"), "A healthy player needs no remark: " + healthy);
+
+		scene.player().setHealth(4.0F);
+		String hurt = WorldService.facts(scene.player(), scene.falsity(), scene.config());
+		helper.assertTrue(hurt.contains("The player is hurt: 2 of 10 hearts left."), "A badly hurt player should be among the facts: " + hurt);
+
+		scene.say("how was your day?");
+		helper.assertTrue(scene.groq().system(0).contains("The player is hurt: 2 of 10 hearts left."),
+			"And the model should be told, so a protective companion can speak up: " + scene.groq().system(0));
 		helper.succeed();
 	}
 

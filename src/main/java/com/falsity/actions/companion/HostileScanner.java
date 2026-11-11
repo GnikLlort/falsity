@@ -3,6 +3,8 @@ package com.falsity.actions.companion;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
@@ -37,6 +39,18 @@ public final class HostileScanner {
 		}
 		result.sort(Comparator.comparingDouble(entity -> entity.distanceToSqr(center)));
 		return result;
+	}
+
+	/** The plain id of a mob's kind ("creeper", "zombie_villager"), or "hostile mob" when it has none. */
+	public static String label(LivingEntity entity) {
+		try {
+			Identifier key = BuiltInRegistries.ENTITY_TYPE.getKey(entity.getType());
+			String id = key == null ? "hostile mob" : key.toString();
+			int colon = id.indexOf(':');
+			return colon >= 0 ? id.substring(colon + 1) : id;
+		} catch (RuntimeException missing) {
+			return "hostile mob";
+		}
 	}
 
 	/** The nearest live hostile mob within the radius, or null. */

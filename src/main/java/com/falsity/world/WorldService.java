@@ -17,6 +17,7 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.gamerules.GameRules;
@@ -38,6 +39,9 @@ public final class WorldService {
 	/** Ore and cave scans never look further than this vertically. */
 	private static final int MAX_VERTICAL_RADIUS = 32;
 
+	/** How far around the player hostile mobs are counted for the facts given to the model. */
+	private static final double DANGER_RADIUS = 16.0;
+
 	private WorldService() {
 	}
 
@@ -53,14 +57,17 @@ public final class WorldService {
 
 	/**
 	 * The verified facts given to the model with each message: dimension,
-	 * position (when sharing is allowed), biome, time and weather.
+	 * position (when sharing is allowed), biome, time and weather, and, only
+	 * when there is something to say, that the player is badly hurt or that
+	 * hostile mobs are close. The last two are what let a protective companion
+	 * speak up about real danger instead of imagined danger.
 	 */
 	public static String facts(Player player, FalsityEntity falsity, FalsityConfig config) {
 		if (!(falsity.level() instanceof ServerLevel level)) {
 			return "";
 		}
 		BlockPos pos = player.blockPosition();
-		return WorldAnswers.facts(
+		String facts = WorldAnswers.facts(
 			pos.getX(), pos.getY(), pos.getZ(),
 			dimensionPath(level),
 			biomePath(level, pos),
@@ -69,6 +76,15 @@ public final class WorldService {
 			level.isThundering(),
 			mayShareCoordinates(level, config)
 		);
+
+		List<String> hostiles = new ArrayList<>();
+		// The same switch that decides whether Falsity keeps watch when asked.
+		if (config.autonomy.exploration) {
+			for (LivingEntity hostile : HostileScanner.nearbyHostiles(level, player, DANGER_RADIUS)) {
+				hostiles.add(HostileScanner.label(hostile));
+			}
+		}
+		return facts + WorldAnswers.danger(player.getHealth(), player.getMaxHealth(), hostiles, (int) DANGER_RADIUS);
 	}
 
 	/**
