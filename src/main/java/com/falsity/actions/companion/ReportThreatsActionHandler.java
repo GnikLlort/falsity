@@ -22,6 +22,10 @@ public final class ReportThreatsActionHandler implements ActionHandler {
 
 	@Override
 	public ActionResult handle(ActionContext context, ActionRequest request) {
+		if (!context.config().autonomy.exploration) {
+			return ActionResult.failure("I'm not keeping watch right now.");
+		}
+
 		List<LivingEntity> hostiles = HostileScanner.nearbyHostiles(context.level(), context.player(), RADAR_RADIUS);
 		if (hostiles.isEmpty()) {
 			return ActionResult.ok("Nothing dangerous nearby.");

@@ -1,5 +1,6 @@
 package com.falsity.chat;
 
+import java.util.Collection;
 import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -41,6 +42,12 @@ public final class ChatDetector {
 	private static final Pattern TRAILING_PUNCT_ONLY = Pattern.compile("^[.,!?;:\u2026'\"\\)\\]]*$");
 	private static final Pattern TRAILING_WORD = Pattern.compile("([\\p{L}]+)$");
 
+	/** What comes after a name when the sentence is about that person rather than to them ("... is here", "... was mining"). */
+	private static final Pattern STATEMENT_ABOUT = Pattern.compile(
+		"^\\s+(?:is|isn'?t|was|wasn'?t|has|hasn'?t|had|will|won'?t|would|can|can'?t|could|did|didn'?t|does|doesn'?t|said|says|went|got|just|"
+		+ "died|left|joined|keeps|wants|needs|took|made|built|found|and|or)\\b",
+		Pattern.CASE_INSENSITIVE);
+
 	private ChatDetector() {
 	}
 
@@ -56,6 +63,46 @@ public final class ChatDetector {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Whether the message is spoken to one of the others named: it uses one of
+	 * their names the way a name is used to call someone ("Alex, come here",
+	 * "thanks Alex", "where are you Alex?"). A sentence that is merely about
+	 * them ("Alex is here", "I saw Alex") does not count.
+	 *
+	 * <p>This is what keeps a follow-up window from turning Falsity into an
+	 * eavesdropper: a player who was just talking to Falsity and then turns to
+	 * another player is no longer talking to Falsity.
+	 */
+	public static boolean addressesSomeoneElse(String message, Collection<String> otherNames) {
+		if (message == null || message.isBlank() || otherNames == null) {
+			return false;
+		}
+		for (String name : otherNames) {
+			if (name == null || name.isBlank()) {
+				continue;
+			}
+			String cleaned = name.trim();
+			// "@Alex" is addressed to Alex wherever it stands and whatever follows.
+			if (Pattern.compile("(?<![\\p{L}\\p{N}_])@" + Pattern.quote(cleaned) + "(?![\\p{L}\\p{N}_])",
+				Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE).matcher(message).find()) {
+				return true;
+			}
+			if (mentions(message, cleaned) && !STATEMENT_ABOUT.matcher(afterLeadingName(message, cleaned)).find()) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** What follows a name that opens the message, or an empty string when the message does not open with it. */
+	private static String afterLeadingName(String message, String name) {
+		Matcher matcher = wordPattern(name).matcher(message);
+		if (matcher.find() && message.substring(0, matcher.start()).isBlank()) {
+			return message.substring(matcher.end());
+		}
+		return "";
 	}
 
 	/**

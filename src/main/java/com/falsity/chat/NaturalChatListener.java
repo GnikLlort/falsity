@@ -1,35 +1,50 @@
 package com.falsity.chat;
 
 import com.falsity.FalsityMod;
+import com.falsity.actions.ActionType;
 import com.falsity.actions.ConfirmationManager;
 import com.falsity.actions.IntentRecognizer;
 import com.falsity.ai.ConversationManager;
 import com.falsity.building.BuildManager;
 import com.falsity.entity.FalsityEntity;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
 import net.minecraft.network.chat.ChatType;
+import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.PlayerChatMessage;
 import net.minecraft.server.level.ServerPlayer;
 
 /**
- * Listens to ordinary player chat and lets Falsity answer without a command.
+ * Lets players talk to Falsity in ordinary chat.
  *
- * <p>Nothing here blocks, rewrites or forwards a message: the event fires after
- * the message is broadcast, so normal chat is completely unaffected. Falsity
- * only speaks when a message addresses it by name or continues a conversation
- * that is still warm, and only the Falsity bonded to that player within range
- * answers. Other players' chatter is never sent to Groq.
+ * <p>A message is for Falsity when it uses its name ("Falsity, follow me") or
+ * continues a conversation that is still warm. Everything else is left alone.
+ * The message is never cancelled or altered; other players still see it.
  *
- * <p>Confirmation replies and build cancellation are handled before the
- * mention check, so "yes" answers a pending question and "stop building"
- * cancels a build even when Falsity is not named.
+ * <p>Each chat message is handled once, and a message that was meant for
+ * Falsity never disappears without a word: if it is too long, if Falsity is
+ * too far away to hear, or if the player has to wait, the player is told.
  */
 public final class NaturalChatListener {
+	/** How often a player is reminded that Falsity is out of earshot. */
+	private static final long OUT_OF_RANGE_NOTICE_MILLIS = 30_000L;
+
+	/** The chat message last handled for each player, to recognise a repeat delivery of the same one. */
+	private static final Map<UUID, Handled> LAST_HANDLED = new HashMap<>();
+	private static final Map<UUID, Long> LAST_RANGE_NOTICE = new HashMap<>();
+
+	private record Handled(Instant sentAt, String text) {
+	}
+
 	private NaturalChatListener() {
 	}
 
-	/** Registers the listener. Call once during mod initialisation. */
 	public static void register() {
 		ServerMessageEvents.CHAT_MESSAGE.register(NaturalChatListener::onChatMessage);
 	}
@@ -42,18 +57,28 @@ public final class NaturalChatListener {
 			return;
 		}
 
-		String decorated = message.decoratedContent().getString();
-		String raw = ChatDetector.stripBroadcastPrefix(decorated);
+		// The text exactly as the player typed it, before any chat decoration.
+		String raw = ChatDetector.stripBroadcastPrefix(message.signedContent());
 		if (raw.isEmpty() || raw.startsWith("/")) {
 			return;
 		}
-		if (raw.length() > FalsityMod.config().chat.maxMessageLength) {
-			return;
+
+		// One chat message, one reply: the same message delivered twice is ignored.
+		synchronized (LAST_HANDLED) {
+			Handled current = new Handled(message.timeStamp(), raw);
+			if (current.equals(LAST_HANDLED.get(sender.getUUID()))) {
+				FalsityMod.debug("Ignored a repeated delivery of the same chat message from {}.", sender.getName().getString());
+				return;
+			}
+			LAST_HANDLED.put(sender.getUUID(), current);
 		}
 
 		Optional<FalsityEntity> companion = CompanionFinder.findBonded(
 			sender.level(), sender, FalsityMod.config().chat.maxConversationDistance);
 		if (companion.isEmpty()) {
+			if (ChatDetector.mentions(raw, "Falsity")) {
+				noticeOutOfRange(sender);
+			}
 			return;
 		}
 		FalsityEntity falsity = companion.get();
@@ -79,7 +104,7 @@ public final class NaturalChatListener {
 		if (builds != null && builds.isActive(sender.getUUID())) {
 			boolean stopRequested = ChatDetector.isNegative(raw)
 				|| IntentRecognizer.recognize(raw)
-					.filter(request -> request.type() == com.falsity.actions.ActionType.STOP_BUILD)
+					.filter(request -> request.type() == ActionType.STOP_BUILD)
 					.isPresent();
 			if (stopRequested) {
 				ConversationManager.say(sender, falsity, builds.cancel(sender.getUUID()));
@@ -94,6 +119,18 @@ public final class NaturalChatListener {
 		if (!addressed && !contextual) {
 			return;
 		}
+		if (!addressed && ChatDetector.addressesSomeoneElse(raw, otherPlayerNames(sender, falsityName))) {
+			// The player has turned to somebody else. That is not a follow-up, and it
+			// ends the conversation with Falsity until Falsity is named again.
+			FalsityMod.contexts().clear(sender.getUUID());
+			FalsityMod.debug("Left a message from {} alone: it was said to another player.", sender.getName().getString());
+			return;
+		}
+
+		if (raw.length() > FalsityMod.config().chat.maxMessageLength) {
+			sender.sendSystemMessage(Component.translatable("message.falsity.too_long"));
+			return;
+		}
 
 		String cleaned = ChatDetector.stripMention(raw, falsityName);
 		if (FalsityMod.contexts() != null) {
@@ -104,6 +141,54 @@ public final class NaturalChatListener {
 			}
 		}
 
-		FalsityMod.conversations().requestConversation(sender, falsity, cleaned);
+		ConversationManager.Outcome outcome = FalsityMod.conversations().requestConversation(sender, falsity, cleaned);
+		switch (outcome) {
+			case TOO_LONG -> sender.sendSystemMessage(Component.translatable("message.falsity.too_long"));
+			case ON_COOLDOWN -> sender.sendSystemMessage(Component.translatable(
+				"message.falsity.cooldown", FalsityMod.conversations().cooldownRemainingSeconds(sender.getUUID())));
+			case DISABLED -> {
+				if (addressed) {
+					sender.sendSystemMessage(Component.translatable("message.falsity.talking_disabled"));
+				}
+			}
+			default -> {
+				// ACCEPTED: answered, or on its way. QUEUED: waiting its turn; the reply follows.
+			}
+		}
+	}
+
+	/** The names of everyone else online, so a message called out to one of them is not taken as a follow-up. */
+	private static List<String> otherPlayerNames(ServerPlayer sender, String falsityName) {
+		List<String> names = new ArrayList<>();
+		try {
+			for (ServerPlayer other : sender.level().getServer().getPlayerList().getPlayers()) {
+				String name = other.getName().getString();
+				if (other != sender && !name.equalsIgnoreCase(falsityName)) {
+					names.add(name);
+				}
+			}
+		} catch (RuntimeException exception) {
+			// Without the list nothing is filtered, which is how it behaved before.
+		}
+		return names;
+	}
+
+	/** Tells a player, at most every half minute, that their Falsity is too far away to hear. */
+	private static void noticeOutOfRange(ServerPlayer sender) {
+		long now = System.currentTimeMillis();
+		synchronized (LAST_RANGE_NOTICE) {
+			Long last = LAST_RANGE_NOTICE.get(sender.getUUID());
+			if (last != null && now - last < OUT_OF_RANGE_NOTICE_MILLIS) {
+				return;
+			}
+			LAST_RANGE_NOTICE.put(sender.getUUID(), now);
+		}
+		// Only players who already know a Falsity are told; everyone else is just chatting.
+		if (FalsityMod.memories() != null) {
+			var memory = FalsityMod.memories().getOrCreate(sender.getUUID(), sender.getName().getString());
+			if (memory.conversationCount > 0 || memory.petCount > 0) {
+				sender.sendSystemMessage(Component.translatable("message.falsity.no_companion"));
+			}
+		}
 	}
 }

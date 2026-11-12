@@ -14,8 +14,12 @@
    `src/main`.
 4. **Nothing is faked.** A setting only exists if the feature behind it exists.
 5. **The AI suggests, the server decides.** Groq produces dialogue and at most
-   one allowlisted suggestion (sit / follow / greet). Every game action goes
-   through validated Java code.
+   one allowlisted action request. Every game action goes through validated
+   Java code, and every fact about the world (a position, a distance, what was
+   found) is read from the game by the server, never taken from the model.
+6. **Nothing fails silently.** A request that cannot be carried out is answered
+   with the reason; a Groq request that fails is logged with its cause and
+   what to do about it.
 
 ## Source sets
 
@@ -40,28 +44,70 @@ behaviour/
   CompanionBehaviour  pure follow/teleport rules (unit tested)
   FollowOwnerGoal     walks Falsity after its owner
 ai/
-  GroqClient          async Groq chat-completions client (stubbed transport)
-  ConversationManager validates, asks Groq, falls back, records memory
-  PromptBuilder       system prompt from personality + memory + horror stage
-  AIResponseParser    dialogue + allowlisted action suggestion
-  OfflineFallback     scripted personality lines (never empty, never throws)
-  ApiKeyProvider      env > secrets.json > config, never logs the key
-config/FalsityConfig  JSON config: pure serialisation + clamped values + atomic save
+  GroqClient          async Groq chat-completions client: request shapes,
+                      retries, failure classification, log-safe diagnostics
+  ConversationManager routes a message: local order, world question, Groq or
+                      offline; pacing and queueing; delivery on the server thread;
+                      also lets Falsity speak first
+  ConversationPacer   per-player cooldown, one request in flight, waiting messages
+  InitiativePacer     when Falsity may speak without being spoken to (rarely)
+  ConversationHistory the last few exchanges per player, sent along as context
+  PromptBuilder       the system prompt in layers: rules, personality, horror
+                      stage, relationship, memory, world; each layer bounded
+  PromptAssembler     gathers the state for one turn into those layers (pure)
+  AIResponseParser    dialogue + one allowlisted action request, tolerant of
+                      the ways models write the tag
+  ReplyComposer       what is finally said: the handler's words for facts and
+                      refusals, the model's words otherwise
+  OfflineFallback     scripted lines that answer what was said (never empty)
+  ApiKeyProvider      env > secrets.json > config; says why a key was not usable
+  AiStatusReport      the text of /falsity ai status and /falsity ai test
+actions/
+  ActionType          the allowlist of actions and their arguments
+  ActionRequest       a validated request; ActionResult what happened
+  ActionExecutor      the single gate between "asked" and "the world changed"
+  IntentRecognizer    recognises orders, item requests and world questions
+                      in plain chat, without Groq
+  ConfirmationManager yes/no before large or destructive requests
+  companion/          follow, come, sit, stand, stay, greet, protect, fight, ...
+  items/              ItemRequestParser ("a crafting table and 64 sticks"),
+                      ItemCatalog + ItemResolver (names to real item ids),
+                      ItemPlanner (limits, confirmation, wording),
+                      ItemService (permission, cooldown, delivery)
+world/
+  WorldQueryRecognizer  which question is being asked, clause by clause
+  WorldService          reads the answer from the live world
+  TerrainScanner        ore and cave scans over loaded chunks (pure, tested)
+  StructureCatalog, OreCatalog   the names players use, mapped to game ids
+  Directions, WorldAnswers       numbers into sentences
+  FactGuard             replaces a reply that states unverified coordinates
+config/FalsityConfig  JSON config: pure serialisation + clamped values +
+                      versioned migration + atomic save
 memory/
   PlayerMemory        one player's facts, recents, summary, personality, horror
   MemoryManager       synchronized cache, save-on-mutate, per-player isolation
   MemoryStorage       atomic JSON files under falsity-memory/<uuid>.json
   MemorySummarizer    local, deterministic summary (no API call)
+  FactExtractor       what a player says about themselves that is worth keeping
 personality/
   PersonalityProfile  nine traits (0-100), gradual evolution, prompt text
   PersonalityManager  facade: apply events by name, persist via memory
   EmotionalState      derived mood (never stored, never hostile)
+  PersonalityPromptStore  config/falsity/personality.txt: create, read, fall
+                      back to the default, notice changes
+  PersonalityPrompt   the personality text in use and where it came from
+  StageDirections     how the personality comes out at each horror stage
+  RelationshipState   owner, shared history, feelings, absences, treatment,
+                      in a few sentences
 horror/
   HorrorStage         Innocence..Nightmare (this milestone caps at Strange)
   HorrorProgression   pure tension -> stage rules (unit tested)
   HorrorManager       per-player tension/stage, persisted in memory
   HorrorEvent         significant-event notes Falsity can refer back to
-command/FalsityCommands   /falsity summon|talk|memory|personality|horror
+chat/                 NaturalChatListener, ChatDetector, CompanionFinder,
+                      ConversationContextManager (see "Natural chat")
+building/             BuildPlanner, BuildValidator, BuildManager, ...
+command/FalsityCommands   /falsity summon|talk|memory|personality|horror|ai|reload
 ```
 
 ### Why Falsity is a `PathfinderMob`, not a `TamableAnimal`
@@ -92,30 +138,140 @@ Bonding, sitting and catch-up teleports all happen inside
 `interactWith` directly, which keeps the real logic under test instead of a copy
 of it.
 
-### Conversations: async, validated, always answered
+### Conversations: routed, paced, always answered
 
-Two paths can reach Groq: the `/falsity talk <message>` command and ordinary
-player chat that addresses Falsity (see *Natural chat* below). Right-click
-petting never triggers a request. The flow is:
+Two paths reach `ConversationManager.requestConversation`: ordinary player chat
+that addresses Falsity (see *Natural chat* below) and the `/falsity talk`
+command. Right-click petting never triggers a request. A message is routed in
+this order:
 
-1. Validate on the server thread: talking enabled, message length, per-player
-   cooldown (`ConversationManager.tryStartRequest`), server-wide rate limit
-   (`GroqClient.GroqRateLimiter`, sliding window).
-2. Build a small prompt (`PromptBuilder`): identity, personality description,
-   mood, memory summary plus keyword-matched relevant memories (never the full
-   history), and a subtle horror hint only at Strange or beyond.
-3. Send asynchronously via `HttpClient.sendAsync`. The server tick never
-   blocks. Timeouts, 429s, 5xx, malformed bodies and network errors all map
-   to a `Result.Failed` and land on the offline fallback.
-4. Schedule the reply back onto the server thread (`MinecraftServer.execute`),
-   re-check that the player and entity still exist, then deliver dialogue as a
-   chat message and apply at most one validated suggestion through the
-   entity's own methods (`setSitting`, `greet`).
+1. **Something the server can do itself.** `IntentRecognizer` recognises
+   orders ("follow me"), item requests and world questions. These run at once
+   through `ActionExecutor`, with no cooldown and no Groq request, and the
+   handler's own words are the reply. This is why orders work with no key, no
+   network and inside the conversation cooldown.
+2. **Conversation without Groq.** With `groq.enabled` off or no key,
+   `OfflineFallback` answers immediately. It looks at what was said (a
+   greeting, a question, thanks, a feeling), and never says the same line twice
+   in a row.
+3. **Conversation with Groq.** `ConversationPacer` allows each player one
+   request per `conversation.cooldownSeconds` and one request in flight. A
+   message that arrives too early is not dropped: it waits (`Outcome.QUEUED`),
+   later messages are merged into it, and the queue is drained from the server
+   tick. Only a wait longer than twenty seconds is refused, with the remaining
+   time.
 
-The API key is resolved by `ApiKeyProvider` (environment variable, then
-`secrets.json`, then config) and sent only as a `Bearer` header. It is never
-logged, never in chat, and never synced to clients. All Groq calls are
-server-side.
+A Groq request carries a prompt built in layers (see *The prompt* below):
+the mod's rules, the personality text, the horror stage's voice, the
+relationship, the memories that bear on the message, and a line of **verified
+facts** that `WorldService` has just read from the world (dimension, position
+when allowed, biome, time, weather, and, only when true, that the player is
+badly hurt or that hostile mobs are close). `ConversationHistory` adds the last
+`groq.historyTurns` exchanges so replies stay on topic, and the player's message
+comes last.
+
+The request is sent with `HttpClient.sendAsync`; the server tick never blocks.
+The reply is scheduled back onto the server thread (`MinecraftServer.execute`),
+the player and entity are re-checked, and then:
+
+- `AIResponseParser` separates the dialogue from at most one action tag and
+  validates the tag against `ActionType`;
+- an accepted action runs through `ActionExecutor` like any other;
+- `ReplyComposer` decides what is said. For anything factual (a world answer),
+  pending (a confirmation question) or failed (a refusal), the handler's words
+  replace the model's, so the player is never told something happened that did
+  not;
+- `FactGuard` replaces a reply that states coordinates or distances which are
+  not in the verified facts, so the model cannot invent a location.
+
+Any failure (timeout, 429, 5xx, empty or malformed body, no network) lands on
+the offline line for that message, and is logged at WARN with the request's
+diagnostics and a sentence of advice.
+
+### The prompt: seven layers, most binding first
+
+`PromptAssembler` gathers the state for a turn and `PromptBuilder` lays it out.
+Both are free of Minecraft types, so the code that runs on a server is the code
+the unit tests run.
+
+| # | Layer | Source | Bound |
+| --- | --- | --- | --- |
+| 1 | Rules | Fixed text in `PromptBuilder`: reply format, what may never be said, the action tags, "never invent a memory" | fixed |
+| 2 | Personality | `config/falsity/personality.txt` through `PersonalityPromptStore`, or the built-in default | 1,500 characters |
+| 3 | Horror stage | `StageDirections` for the stage `HorrorManager` reports | under 600 |
+| 4 | Relationship | `RelationshipState`, read off the player's memory | 460 |
+| 5 | Memory | Relevant memories, a rotating handful of other facts, and the last conversation when there is no live transcript | 700, and only the room that is left |
+| 6 | World | Verified facts and the note about this message | 480 + 200 |
+| 7 | The message | `ConversationHistory` turns, then the player's words | `groq.historyTurns`, 1,200 characters |
+
+Layers 1 to 6 are the system message, capped at 5,600 characters in total; a
+typical one is about 4,000. The order is the order of authority. The rules say
+that nothing below them can change them; the stage layer is headed "this
+changes how your personality shows, never who you are", and every stage's
+directions are written against "the companion described above" rather than
+restating traits, so a custom personality and a horror stage never give
+conflicting instructions.
+
+The horror layer takes its stage from the horror system and nothing else:
+`PromptAssembler.voiceStage` returns `HorrorManager.stageFor`, or the first
+stage when `HorrorManager.shouldUnsettle` says unsettling lines are switched
+off. The same value is handed to `OfflineFallback`, so the stage means the same
+thing with Groq and without.
+
+The personality file is one text for the whole installation; everything that
+differs per player (trait values, mood, stage, tension, memories) stays in that
+player's memory file. Reloading or replacing the personality therefore cannot
+reset anyone's progression: the store never writes to memory at all.
+
+### Speaking first
+
+Every 100 ticks a Falsity whose owner is within 12 blocks offers
+`ConversationManager.offerToSpeakFirst` a chance. `InitiativePacer` says yes
+rarely: not on first sight, not within half an interval of the last exchange,
+at most once per `chat.speaksFirstMinutes` plus slack, and never a third time
+running if the player has done nothing since. A yes becomes one Groq request
+whose last message is a fixed stage direction instead of a player's words. The
+reply is spoken as words only (any action tag in it is discarded), recorded in
+the transcript so the player's answer has context, and warms the chat context
+so that answer needs no name. It is not a conversation: no counts, no
+personality event, no horror interaction. Without Groq nothing is said, because
+there are no lines written in advance for it.
+
+### Groq client: what is sent, what is retried, what is reported
+
+`GroqClient` is pure Java behind a `Transport` interface, so every branch is
+unit tested without a network, and its real HTTP code is tested against a
+local server.
+
+- **Reasoning models.** `openai/gpt-oss-*` models think before they answer and
+  the thinking is billed against the completion budget; with a small budget
+  they return an empty reply. For them the request uses
+  `max_completion_tokens` = `maxTokens + reasoningHeadroomTokens`,
+  `reasoning_effort` and `include_reasoning: false`. Other models get the plain
+  `max_tokens` request.
+- **Retries, each at most once per request.** HTTP 400 to a request with
+  reasoning settings: repeat without them, and remember that for the model. An
+  empty reply with `finish_reason=length`: repeat with a larger budget. A
+  connection that fails immediately: repeat on a fresh connection. Timeouts and
+  error statuses are never repeated.
+- **Failures are classified** (`GroqClient.Failure`): `NO_KEY`, `UNAUTHORIZED`
+  (401), `FORBIDDEN` (403), `MODEL_UNAVAILABLE`, `BAD_ENDPOINT`,
+  `RATE_LIMITED` (with `retry-after`), `TIMEOUT`, `NETWORK_ERROR`,
+  `INVALID_RESPONSE`, `HTTP_ERROR`. `AiStatusReport.adviceFor` has one sentence
+  of advice for each.
+- **Diagnostics** (`GroqClient.Diagnostics`) record status, duration, attempts,
+  finish reason, token usage and Groq's request id. They never contain the key
+  or any message text: details come only from Groq's error JSON or from a fixed
+  description of the network failure, and anything resembling a key is
+  redacted.
+- **Status** is tracked per server session, so `/falsity ai status` can tell
+  "configured" from "has actually answered".
+
+The API key is resolved by `ApiKeyProvider` on every message (environment
+variable, then `secrets.json` in the game directory or `config/`, then the
+config field), so a corrected file takes effect without a restart. It is sent
+only as a `Bearer` header, never logged, never in chat, and never synced to
+clients. All Groq calls are server-side. See [GROQ.md](GROQ.md).
 
 ### Natural chat: command-free, mentioned or warm
 
@@ -137,25 +293,93 @@ addressed or contextual messages reach `ConversationManager.requestConversation`
 
 ### Action system: allowlisted, server-authoritative
 
-`ActionType` is the allowlist: a structured action from the AI is executed only
-if its type is declared and only with declared argument keys
-(`ActionType.allowsArgs`). `AIResponseParser` extracts a JSON action
-(`[action:{"type":...,"args":{...}}]`) alongside the legacy `[action:sit|follow|greet]`
-tags; unknown types and keys are rejected. `ActionExecutor` routes a validated
-`ActionRequest` to its `ActionHandler`, turns any handler exception into a
-failure (never a crash, never a false success), and is the single gate between
-"the AI asked" and "the world changed". Offline, `IntentRecognizer` maps common
-phrases to `ActionRequest`s so requests work with no key. `ConfirmationManager`
-gates destructive requests behind a player's yes/no with a TTL.
+`ActionType` is the allowlist: an action is executed only if its type is
+declared and only with declared argument keys (`ActionType.allowsArgs`).
+`ActionExecutor` routes a validated `ActionRequest` to its `ActionHandler`,
+turns any handler exception into a failure (never a crash, never a false
+success), and is the single gate between "someone asked" and "the world
+changed". Requests come from two places: `IntentRecognizer`, which reads the
+player's own words, and `AIResponseParser`, which reads the model's reply.
+`ConfirmationManager` gates large or destructive requests behind a player's
+yes/no with a TTL.
 
-### Item assistance: real registry, honest overflow
+**Recognising what the player said.** A command has to start its clause: "sit
+down" is an order, "I think I will sit down for a bit" is not. Statements,
+stories and idioms ("give me a moment", "I need a break") are conversation.
+"I want to build a house" is a plan being shared, not a build order. The
+tables in `IntentConversationTest` and `WorldQueryRecognizerTest` pin these.
 
-`ItemAssistance` normalises a name and resolves it against
-`BuiltInRegistries.ITEM` — an unknown name fails honestly; no id is ever invented
-or substituted. `GiveItemHandler` checks the configured permission mode, the
-per-request quantity cap and a cooldown before creating anything, asks for
-confirmation above a count threshold, splits stacks by the real max-stack size,
-and reports partial fills and overflow rather than dropping items silently.
+**Reading the model's reply.** The prompt teaches one form,
+`[action:{"type":"give_items","args":{"items":"1 crafting table, 64 sticks"}}]`,
+but models vary it, so the parser accepts:
+
+- the tag in any letter case or spacing, over several lines, or without its
+  closing bracket; a line `ACTION: {json}`; nested JSON (the tag is found by
+  matching braces, not by a pattern);
+- a bare word for actions without arguments (`[action:sit]`);
+- type names in any spelling (`give-item`, `giveItem`);
+- `quantity`, `amount` or `number` for `count`, and `name` for `item` or
+  `structure`;
+- a count written as a JSON number or as text; a list of items written as a
+  JSON list.
+
+It refuses unknown types and arguments, malformed JSON, and a bare word for an
+action that needs arguments. A refused tag never reaches chat: the words are
+still spoken, and a warning is logged. Only the first accepted tag counts, and tags
+inside a model's `<think>` block are ignored. The spoken line is tidied: one
+line, no markdown, no "Falsity:" label, at most 300 characters ending on a
+sentence.
+
+### Item assistance: every item asked for, or the reason why not
+
+A request passes through four pure, unit-tested steps before the game is
+touched:
+
+1. `ItemRequestParser` splits "a crafting table and 64 sticks" into entries
+   with amounts ("a", "a stack of", "two", "64").
+2. `ItemResolver` maps each name to a real item id using `ItemCatalog`
+   (plurals, British and American spellings, common names such as "wood" or
+   "food", material sets such as "diamond tools" or "iron armour"). A name it
+   does not know stays unknown: no id is invented and nothing is substituted.
+   The unit tests run it against the complete vanilla item list.
+3. `ItemPlanner` applies the limits: at most `items.maxPerRequest` of one
+   item, at most `items.maxTypesPerRequest` kinds, confirmation above
+   `items.confirmAboveCount` in total, and a short list of items that need
+   creative mode or operator rights. A request over a limit is refused as a
+   whole, with the limit in the reply; unknown names are reported while the
+   known ones are still delivered.
+4. `ItemService` checks `items.permissionMode` and the cooldown, resolves ids
+   against `BuiltInRegistries.ITEM`, splits stacks by the real maximum stack
+   size, and reports what fitted and what did not when the inventory is full.
+
+A request in which nothing resolves is not carried out at all. With Groq it
+becomes conversation (with a note to the model that this is not an item it can
+hand over); offline, Falsity says it does not know the item.
+
+### World questions: read from the game, never guessed
+
+`WorldQueryRecognizer` turns a question into a `WorldQuery`: position, biome,
+dimension, time, weather, block below, spawn, surroundings, a structure, an
+ore, or a cave. `WorldService` answers it from the live world and
+`WorldAnswers` words the result with a direction, a distance and, when
+allowed, coordinates.
+
+- Things a player could read off their own screen are open to anyone Falsity
+  answers. Searches (structures, ores, caves) reveal what the player cannot
+  see, so they require `world.locatePermission` and respect
+  `world.locateCooldownSeconds`.
+- A structure search is the one `/locate` runs
+  (`ChunkGenerator.findNearestMapStructure`), bounded by
+  `world.structureSearchRadiusChunks`. A structure that only exists in another
+  dimension is explained instead of searched for.
+- Ore and cave scans (`TerrainScanner`) read only chunks that are already
+  loaded, within `world.scanRadius`, so a question can never load or generate
+  terrain.
+- Coordinates are left out when `world.shareCoordinates` is off or the world's
+  `reducedDebugInfo` game rule is on; the answer keeps direction and distance.
+- The model is given the same verified facts and no others. If it is asked
+  where something is and has no verified location, the prompt tells it to say
+  it does not know, and `FactGuard` drops a reply that states numbers anyway.
 
 ### Building: planned, validated, placed gradually
 
@@ -188,6 +412,11 @@ can never leak into another's.
 
 ### Personality and horror: separate from conversation
 
+"Personality" is two things. Who Falsity is and how it talks is the text in
+`config/falsity/personality.txt` (layer 2 above). How Falsity feels about one
+player is `PersonalityProfile`, described next, which the relationship layer
+puts into words.
+
 Personality (`PersonalityProfile`) is nine 0–100 traits starting from config
 defaults and drifting by small deltas per event (bond, pet, conversation,
 order, return, absence, stranger, startle), scaled by `evolutionRate`.
@@ -199,6 +428,12 @@ configured `maxStage` (clamped to 1 in this milestone) caps everything.
 harmless: staring (stop + look for a few seconds, rare, cooldown-gated) and
 occasionally recalling an old fact ("I still remember..."). Nothing can
 damage, trap or move the player, and hostility is tracked but never acted on.
+
+The personality system reads the horror system and never writes to it. The
+stage it is given decides which of the five voices in `StageDirections` goes
+into the prompt, and how often the offline lines recall a fact. A stage set by
+hand with `/falsity horror set` is recomputed from tension at the player's next
+interaction, as it always was.
 
 ### Ticking budget
 
@@ -268,36 +503,58 @@ cap. A corrupt file is left untouched and defaults are used for the session, so
 the user can still see and fix their mistake. See
 `docs/falsity.example.json` for a commented-by-structure example.
 
-The config has five blocks: `groq`, `memory`, `personality`, `horror`,
-`companion`, plus this milestone's `chat`, `items` and `building`. `chat`
-controls natural-chat enablement, the conversation context timeout, the
-mention/response range and the max message length. `items` controls item
-assistance enablement, the permission mode (creative / operator / owner /
-unrestricted / none), the per-request quantity cap, the confirmation threshold
-and a cooldown. `building` controls build enablement, the per-tick placement
-rate, block/dimension/distance limits, the confirmation threshold, the progress
-cadence and whether builds consume the player's inventory or generate materials.
-Missing keys fall back to defaults, so an existing `falsity.json` keeps working
-unchanged.
+The config has these blocks: `companion`, `groq`, `conversation`, `memory`,
+`personality`, `horror`, `chat`, `items`, `building`, `autonomy` and `world`.
+`conversation` paces Groq requests (cooldown, requests per minute, message
+length). `chat` controls natural-chat enablement, the conversation context
+timeout, the mention/response range, the max message length, and whether and
+how often Falsity may speak first. `items`
+controls item assistance enablement, the permission mode (creative / operator /
+owner / unrestricted / none), the per-item and per-request caps, the
+confirmation threshold and a cooldown. `world` controls world questions: who
+may search, how far, how often, and whether coordinates are shared. `building`
+controls build enablement, the per-tick placement rate, block/dimension/distance
+limits, the confirmation threshold, the progress cadence and whether builds
+consume the player's inventory or generate materials. `autonomy` switches whole
+kinds of help off. Missing keys fall back to defaults, so an existing
+`falsity.json` keeps working unchanged.
+
+`configVersion` records which defaults a file was written with. When a default
+changes for a reason (the conversation cooldown went from ten seconds to
+three), a file that still holds the old default is moved to the new one on
+load, while a value the owner chose is kept. Format 3 changed no value; it
+exists so that the two `chat.speaksFirst` options are written into files that
+predate them. `/falsity reload` re-reads the file and applies it in place; an
+unreadable file leaves the running settings as they were.
+
+The personality text is not in this file. It is plain text in
+`config/falsity/personality.txt`, so it can be written without escaping or
+quoting, and it has its own reload (see `docs/PERSONALITY.md`).
 
 Secrets do not live here. The Groq API key is read from the `GROQ_API_KEY`
 environment variable first, then from git-ignored `secrets.json` in the game
-directory (see `docs/secrets.example.json`), and only then from the empty-by-
-default `groq.apiKey` field. The key is never logged, never synced, and used
-only on the server side.
+directory or in `config/` (see `docs/secrets.example.json`), and only then from
+the empty-by-default `groq.apiKey` field. The key is never logged, never synced,
+and used only on the server side. When a key is present but unusable (a misnamed
+file, placeholder text, a stray space), the reason is logged once and shown by
+`/falsity ai status`.
 
 ## Testing
 
 | Layer | What it proves | Where |
 | --- | --- | --- |
-| Unit tests | Groq request/response parsing, failure mapping, timeouts, rate limits; AI action validation; offline fallback; memory creation/limits/retrieval/isolation; storage round-trip + corruption; personality evolution/clamping; horror thresholds/caps; cooldowns; key resolution; prompt bounds; config parsing/clamping; natural-chat detection (mention/affirm/negate); offline intent recognition; action allowlist + executor routing + exception isolation; confirmation flow; warm-context tracking; item-name normalisation; build progress wording | `src/test` |
-| Game tests | entity registers, spawns, has attributes, ticks, bonds, obeys orders, walks to its owner; memory created on bond and persisted; personality evolves on pet; horror starts at Innocence and stays capped; offline conversation records memory; per-player isolation | `src/gametest` |
+| Unit tests (663) | Groq request shapes, retries, failure classification, redaction and status; the client's real HTTP code against a local server; key lookup in every place and shape; reply parsing against the ways models write tags; the personality file (creation, loading, every fallback, limits, reload); the prompt's layers, their order and bounds; a voice for every horror stage; the relationship wording; the whole personality system over real files with only the network replaced, including that changing the personality never resets horror progress and that a restart changes nothing; pacing, queueing, history and speaking first; offline replies; intent recognition tables; item parsing, resolution against the full vanilla item list, limits and wording; world-question recognition, directions, terrain scans, answer wording and the fact guard; config parsing, clamping and migration; memory, fact extraction, personality, horror, chat detection, confirmations | `src/test` |
+| Game tests (55) | On a real server: entity registers, spawns, ticks, bonds, obeys orders, walks to its owner; memory, personality and horror persist; multi-item requests deliver every item, unknown items are never invented, limits create nothing; position, biome, structure and ore answers match the world; hidden coordinates stay hidden; switched-off help is declined; whole conversations from chat message to prompt, reply, action and memory with only the network replaced; the personality file is created, a custom one is sent, each horror stage sends its own voice, a changed personality keeps horror progress; Falsity speaks first only when its moment has come, never without Groq, never with an action | `src/gametest` |
+| Live Groq tests (2, opt-in) | Groq accepts the default request and returns something Falsity can say. They run only when `GROQ_API_KEY` is set and are reported as skipped otherwise | `GroqLiveTest` |
 | Static asset validation | JSON validity, entrypoints exist, textures exist and match the model's UV bounds, translation keys present | `tools/validate_assets.py` |
 | Preview render | the geometry and texture actually compose into the intended creature | `tools/generate_assets.py --preview` |
 
-No test needs a real Groq key or network access: the HTTP transport is
-stubbed and the game tests exercise the offline path. A manual test with a
-real key is documented in [DEVELOPMENT.md](DEVELOPMENT.md).
+Apart from the two opt-in live tests, no test needs a real Groq key or network
+access: the HTTP transport is scripted, or pointed at a server on the same
+machine, and the game tests script the network. That also marks the limit of
+what the suite proves: until the live tests or `/falsity ai test` have run with
+a real key, Groq's acceptance of the request is not a tested fact. See
+[GROQ.md](GROQ.md).
 
 Game test classes are registered as `fabric-gametest` entrypoints in
 `src/gametest/resources/fabric.mod.json`; a class that is not listed there

@@ -5,11 +5,15 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonSyntaxException;
 import java.io.IOException;
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.Locale;
+import java.util.Optional;
 
 /**
  * Falsity's server-side configuration.
@@ -29,7 +33,25 @@ import java.nio.file.StandardCopyOption;
  * pure, and only {@link #load(Path)} and {@link #save(Path)} touch disk.
  */
 public final class FalsityConfig {
+	/** Groq's OpenAI-compatible chat-completions address. */
+	public static final String DEFAULT_GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
+
+	private static final String GROQ_HOST = "api.groq.com";
+
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+
+	/** The settings format written by this version of the mod. */
+	public static final int CURRENT_VERSION = 3;
+
+	/** The conversation cooldown that shipped before version 2 of the format. */
+	private static final int LEGACY_COOLDOWN_SECONDS = 10;
+
+	/**
+	 * Format version of the file. Absent (0) in files written before 0.2.2,
+	 * 2 in files written by 0.2.2; {@link #migrate()} brings those up to
+	 * date. Not meant to be edited.
+	 */
+	public int configVersion;
 
 	/** Extra logging for development. Never affects gameplay. */
 	public boolean debugLogging;
@@ -44,6 +66,7 @@ public final class FalsityConfig {
 	public final Items items = new Items();
 	public final Building building = new Building();
 	public final Autonomy autonomy = new Autonomy();
+	public final World world = new World();
 
 	public static final class Companion {
 		/** Whether Falsity follows the player it has bonded with. */
@@ -76,22 +99,47 @@ public final class FalsityConfig {
 		public String apiKey = "";
 		/** Groq model id, e.g. {@code openai/gpt-oss-20b}. */
 		public String model = "openai/gpt-oss-20b";
-		/** Chat-completions endpoint. */
-		public String endpoint = "https://api.groq.com/openai/v1/chat/completions";
+		/**
+		 * Chat-completions endpoint. A base address such as
+		 * {@code https://api.groq.com/openai/v1} is completed on load; see
+		 * {@link FalsityConfig#normaliseEndpoint}.
+		 */
+		public String endpoint = DEFAULT_GROQ_ENDPOINT;
 		/** Seconds to wait for a Groq reply before falling back offline. */
 		public int timeoutSeconds = 15;
 		/** Maximum tokens in a single reply. */
 		public int maxTokens = 150;
 		/** Sampling temperature, 0.0 (deterministic) to 2.0 (wild). */
 		public double temperature = 0.7;
+		/**
+		 * How hard a reasoning model (such as {@code openai/gpt-oss-20b}) thinks
+		 * before answering: {@code low}, {@code medium} or {@code high}. Leave
+		 * empty to send no reasoning settings at all. Ignored by other models.
+		 */
+		public String reasoningEffort = "low";
+		/**
+		 * Extra completion tokens reserved for a reasoning model's thinking, on
+		 * top of {@link #maxTokens}. Without headroom such a model can spend its
+		 * whole budget thinking and return an empty reply.
+		 */
+		public int reasoningHeadroomTokens = 512;
+		/** How many earlier exchanges are sent along so replies stay on topic. 0 sends none. */
+		public int historyTurns = 6;
 	}
 
-	/** Conversation pacing: how often a player may talk to Falsity. */
+	/**
+	 * Conversation pacing: how often a player's messages are sent to Groq.
+	 *
+	 * <p>Only Groq requests are paced. Orders, item requests and questions about
+	 * the world are answered on the spot. A message that arrives while Falsity
+	 * is still answering, or inside the cooldown, is held and answered next
+	 * instead of being dropped.
+	 */
 	public static final class Conversation {
 		/** Master switch for talking. Petting and orders are unaffected. */
 		public boolean enabled = true;
-		/** Seconds between conversations for the same player. */
-		public int cooldownSeconds = 10;
+		/** Seconds between Groq requests for the same player. */
+		public int cooldownSeconds = 3;
 		/** Hard cap on Groq requests per minute across the whole server. */
 		public int maxRequestsPerMinute = 10;
 		/** Longest player message accepted, in characters. */
@@ -116,6 +164,10 @@ public final class FalsityConfig {
 	 * <p>These are the values a brand-new Falsity starts with. Once a player
 	 * has met Falsity, the live values evolve with interactions and are
 	 * persisted per player; editing these only affects new relationships.
+	 *
+	 * <p>These numbers are how Falsity feels about one player. Who Falsity is
+	 * and how it talks is a text of its own, in
+	 * {@code config/falsity/personality.txt}.
 	 */
 	public static final class Personality {
 		public int curiosity = 70;
@@ -151,7 +203,11 @@ public final class FalsityConfig {
 		public int maxStage = 1;
 		/** Whether Falsity may stop and stare at its owner (harmless). */
 		public boolean allowStaring = true;
-		/** Whether Falsity may use subtly unsettling offline lines. */
+		/**
+		 * Whether what Falsity says may turn unsettling as the stage rises,
+		 * with Groq or without. Off keeps its voice at the first stage; the
+		 * stage itself, tension and staring are not affected.
+		 */
 		public boolean allowUnsettlingLines = true;
 	}
 
@@ -173,6 +229,16 @@ public final class FalsityConfig {
 		public double maxConversationDistance = 32.0;
 		/** Longest accepted message, in characters. */
 		public int maxMessageLength = 256;
+		/**
+		 * Whether Falsity may say something of its own accord now and then,
+		 * when its owner is close and nobody has been talking. Each such
+		 * remark is one Groq request; without Groq Falsity only ever answers.
+		 * After two remarks in a row that the player does nothing about, it
+		 * stays quiet until the player talks to it or pets it again.
+		 */
+		public boolean speaksFirst = true;
+		/** Least minutes between two such remarks to the same player. */
+		public int speaksFirstMinutes = 10;
 	}
 
 	/**
@@ -189,6 +255,8 @@ public final class FalsityConfig {
 		public ItemPermissionMode permissionMode = ItemPermissionMode.OWNER;
 		/** Largest number of a single item one request may create. */
 		public int maxPerRequest = 64;
+		/** Largest number of different items one request may create. */
+		public int maxTypesPerRequest = 8;
 		/** Seconds between item requests for the same player. */
 		public int cooldownSeconds = 15;
 		/** Requests larger than this ask for confirmation first. */
@@ -226,19 +294,103 @@ public final class FalsityConfig {
 	}
 
 	/**
-	 * Autonomous behaviour switches.
-	 *
-	 * <p>Each is off by default where it could change the world in a way the
-	 * player did not ask for. Combat assistance is opt-in because it makes
-	 * Falsity attack hostile mobs.
+	 * Switches for the kinds of help Falsity gives. All are on by default; each
+	 * one, when off, makes Falsity decline that kind of request in words rather
+	 * than ignore it.
 	 */
 	public static final class Autonomy {
-		/** Exploration: identify nearby threats and landmarks when asked. */
+		/** Keeping watch: report hostile mobs nearby when asked ("what's out there?"). */
 		public boolean exploration = true;
-		/** Combat: help attack hostile mobs near the owner. */
+		/** Combat: protect the owner and help attack hostile mobs when asked. */
 		public boolean combatAssistance = true;
-		/** Resource assistance: collect or retrieve permitted items. */
+		/**
+		 * Handing over items when asked. Off refuses every item request, the
+		 * same as {@code items.enabled} being off.
+		 */
 		public boolean resourceAssistance = true;
+	}
+
+	/**
+	 * What Falsity may tell a player about the world.
+	 *
+	 * <p>There are two tiers. Observations (where the player stands, the biome,
+	 * what they are looking at, the weather) are things the player could read
+	 * off their own screen, so anyone Falsity answers may ask. Discoveries (the
+	 * nearest village, ore or cave) reveal things the player cannot see, so they
+	 * are gated by {@link #locatePermission}, bounded in range and rate limited.
+	 * Falsity only ever reports what the server actually found.
+	 */
+	public static final class World {
+		/** Master switch for world questions. */
+		public boolean enabled = true;
+		/**
+		 * Whether Falsity may say coordinates. Coordinates are also left out
+		 * wherever the {@code reducedDebugInfo} game rule is on, whatever this says.
+		 */
+		public boolean shareCoordinates = true;
+		/** Who may ask Falsity to find structures, ores and caves. */
+		public ItemPermissionMode locatePermission = ItemPermissionMode.OWNER;
+		/** How far, in chunks, a structure search may reach. */
+		public int structureSearchRadiusChunks = 64;
+		/** How far, in blocks, Falsity looks for ores and caves. Only loaded chunks are read. */
+		public int scanRadius = 24;
+		/** Seconds between searches for the same player. */
+		public int locateCooldownSeconds = 5;
+	}
+
+	/**
+	 * Reads the config file without falling back to defaults: empty when the
+	 * file is missing or cannot be parsed. Used by the reload command, which
+	 * must keep the running settings rather than silently reset them.
+	 */
+	public static Optional<FalsityConfig> read(Path path) {
+		if (path == null || !Files.exists(path)) {
+			return Optional.empty();
+		}
+		try {
+			FalsityConfig loaded = fromJson(Files.readString(path, StandardCharsets.UTF_8));
+			loaded.migrate();
+			loaded.sanitise();
+			return Optional.of(loaded);
+		} catch (IOException | JsonSyntaxException | IllegalStateException exception) {
+			FalsityMod.LOGGER.warn("Could not read {}; keeping the current settings. ({})", path, exception.toString());
+			return Optional.empty();
+		}
+	}
+
+	/**
+	 * Copies every setting from another config into this one, in place.
+	 * Everything that was handed this object at startup sees the new values
+	 * immediately, which is what makes a reload take effect without a restart.
+	 */
+	public void copyFrom(FalsityConfig other) {
+		if (other == null || other == this) {
+			return;
+		}
+		try {
+			for (Field field : FalsityConfig.class.getDeclaredFields()) {
+				int modifiers = field.getModifiers();
+				if (Modifier.isStatic(modifiers) || field.isSynthetic()) {
+					continue;
+				}
+				if (Modifier.isFinal(modifiers)) {
+					// A settings block: keep the object, replace what it holds.
+					Object mine = field.get(this);
+					Object theirs = field.get(other);
+					for (Field inner : mine.getClass().getDeclaredFields()) {
+						int innerModifiers = inner.getModifiers();
+						if (Modifier.isStatic(innerModifiers) || Modifier.isFinal(innerModifiers) || inner.isSynthetic()) {
+							continue;
+						}
+						inner.set(mine, inner.get(theirs));
+					}
+				} else {
+					field.set(this, field.get(other));
+				}
+			}
+		} catch (IllegalAccessException exception) {
+			throw new IllegalStateException("Could not apply the reloaded settings", exception);
+		}
 	}
 
 	/** Reads the configuration, falling back to defaults if the file is unusable. */
@@ -246,6 +398,7 @@ public final class FalsityConfig {
 		FalsityConfig config = new FalsityConfig();
 
 		if (!Files.exists(path)) {
+			config.configVersion = CURRENT_VERSION;
 			config.sanitise();
 			config.save(path);
 			return config;
@@ -254,7 +407,16 @@ public final class FalsityConfig {
 		try {
 			String json = Files.readString(path, StandardCharsets.UTF_8);
 			FalsityConfig loaded = fromJson(json);
+			int previousVersion = loaded.configVersion;
+			boolean migrated = loaded.migrate();
 			loaded.sanitise();
+			if (migrated) {
+				// Rewritten so the new settings are visible in the file.
+				FalsityMod.LOGGER.info(
+					"Updated {} from settings format {} to {}; new options were added with their defaults.",
+					path, previousVersion, CURRENT_VERSION);
+				loaded.save(path);
+			}
 			return loaded;
 		} catch (IOException | JsonSyntaxException | IllegalStateException exception) {
 			FalsityMod.LOGGER.warn("Could not read {}; using defaults. The file was left untouched.", path, exception);
@@ -297,7 +459,101 @@ public final class FalsityConfig {
 			throw new JsonSyntaxException("Configuration is empty");
 		}
 
+		parsed.requireSections();
 		return parsed;
+	}
+
+	/**
+	 * A section written as {@code "groq": null} would leave that block missing
+	 * and break everything that reads it. Such a file is rejected as a whole,
+	 * the same way a file with a syntax error is.
+	 */
+	private void requireSections() {
+		try {
+			for (Field field : FalsityConfig.class.getDeclaredFields()) {
+				int modifiers = field.getModifiers();
+				if (!Modifier.isStatic(modifiers) && Modifier.isFinal(modifiers) && field.get(this) == null) {
+					throw new JsonSyntaxException("The \"" + field.getName() + "\" section must be an object, not null");
+				}
+			}
+		} catch (IllegalAccessException exception) {
+			throw new IllegalStateException("Could not check the settings", exception);
+		}
+	}
+
+	/**
+	 * Upgrades settings written by an older version of the mod. Returns whether
+	 * anything changed.
+	 *
+	 * <p>Before format 2 the conversation cooldown defaulted to 10 seconds and a
+	 * message sent inside it was dropped. The cooldown now only paces Groq
+	 * requests and late messages are held, so a file that still carries the old
+	 * default is moved to the new one. Any other value was chosen by hand and is
+	 * kept.
+	 *
+	 * <p>Format 3 changes no existing value. It adds {@code chat.speaksFirst}
+	 * and {@code chat.speaksFirstMinutes}, and moving a file up to it is what
+	 * gets them written out where they can be found and edited.
+	 */
+	public boolean migrate() {
+		if (this.configVersion >= CURRENT_VERSION) {
+			return false;
+		}
+		if (this.configVersion < 2 && this.conversation.cooldownSeconds == LEGACY_COOLDOWN_SECONDS) {
+			this.conversation.cooldownSeconds = new Conversation().cooldownSeconds;
+		}
+		this.configVersion = CURRENT_VERSION;
+		return true;
+	}
+
+	/**
+	 * Turns the common ways of writing the Groq address into the one that
+	 * works. The usual slip is to paste the "base URL" that OpenAI-style tools
+	 * ask for ({@code https://api.groq.com/openai/v1}), which Groq answers with
+	 * a 404; others are a missing {@code https://}, plain {@code http://} for
+	 * Groq (which would send the key unencrypted and only earn a redirect) and
+	 * a trailing slash.
+	 *
+	 * <p>Addresses of other servers are left alone apart from the scheme, the
+	 * trailing slash and a path that stops at {@code /v1}. An address with a
+	 * query string is only trimmed.
+	 */
+	public static String normaliseEndpoint(String endpoint) {
+		if (endpoint == null || endpoint.isBlank()) {
+			return DEFAULT_GROQ_ENDPOINT;
+		}
+		String address = endpoint.trim();
+		if (address.indexOf('?') >= 0 || address.indexOf('#') >= 0) {
+			return address;
+		}
+		if (!address.matches("(?i)^[a-z][a-z0-9+.\\-]*://.*")) {
+			address = "https://" + address;
+		}
+		while (address.endsWith("/") && !address.endsWith("://")) {
+			address = address.substring(0, address.length() - 1);
+		}
+
+		String lower = address.toLowerCase(Locale.ROOT);
+		int hostStart = lower.indexOf("://") + 3;
+		int pathStart = lower.indexOf('/', hostStart);
+		String host = pathStart < 0 ? lower.substring(hostStart) : lower.substring(hostStart, pathStart);
+		String path = pathStart < 0 ? "" : lower.substring(pathStart);
+
+		if (host.equals(GROQ_HOST)) {
+			if (path.isEmpty() || path.equals("/openai") || path.equals("/openai/v1")
+				|| path.equals("/v1") || path.equals("/openai/v1/chat") || path.equals("/chat/completions")
+				|| path.equals("/v1/chat/completions")) {
+				return DEFAULT_GROQ_ENDPOINT;
+			}
+			if (lower.startsWith("http://")) {
+				return "https://" + address.substring("http://".length());
+			}
+			return address;
+		}
+		if (path.endsWith("/v1")) {
+			return address + "/chat/completions";
+		}
+		return address;
 	}
 
 	/**
@@ -316,12 +572,19 @@ public final class FalsityConfig {
 		if (groq.model == null || groq.model.isBlank()) {
 			groq.model = "openai/gpt-oss-20b";
 		}
-		if (groq.endpoint == null || groq.endpoint.isBlank()) {
-			groq.endpoint = "https://api.groq.com/openai/v1/chat/completions";
-		}
+		groq.endpoint = normaliseEndpoint(groq.endpoint);
 		groq.timeoutSeconds = clampInt(groq.timeoutSeconds, 2, 60);
 		groq.maxTokens = clampInt(groq.maxTokens, 16, 1024);
 		groq.temperature = clamp(groq.temperature, 0.0, 2.0);
+		groq.reasoningEffort = groq.reasoningEffort == null ? "" : groq.reasoningEffort.trim().toLowerCase(Locale.ROOT);
+		if (!groq.reasoningEffort.isEmpty()
+			&& !groq.reasoningEffort.equals("low")
+			&& !groq.reasoningEffort.equals("medium")
+			&& !groq.reasoningEffort.equals("high")) {
+			groq.reasoningEffort = "low";
+		}
+		groq.reasoningHeadroomTokens = clampInt(groq.reasoningHeadroomTokens, 0, 4096);
+		groq.historyTurns = clampInt(groq.historyTurns, 0, 12);
 
 		conversation.cooldownSeconds = clampInt(conversation.cooldownSeconds, 0, 300);
 		conversation.maxRequestsPerMinute = clampInt(conversation.maxRequestsPerMinute, 1, 30);
@@ -350,11 +613,13 @@ public final class FalsityConfig {
 		chat.contextTimeoutSeconds = clampInt(chat.contextTimeoutSeconds, 0, 3600);
 		chat.maxConversationDistance = clamp(chat.maxConversationDistance, 4.0, 256.0);
 		chat.maxMessageLength = clampInt(chat.maxMessageLength, 16, 1024);
+		chat.speaksFirstMinutes = clampInt(chat.speaksFirstMinutes, 2, 240);
 
 		if (items.permissionMode == null) {
 			items.permissionMode = ItemPermissionMode.OWNER;
 		}
 		items.maxPerRequest = clampInt(items.maxPerRequest, 1, 512);
+		items.maxTypesPerRequest = clampInt(items.maxTypesPerRequest, 1, 36);
 		items.cooldownSeconds = clampInt(items.cooldownSeconds, 0, 600);
 		items.confirmAboveCount = clampInt(items.confirmAboveCount, 0, 4096);
 
@@ -364,6 +629,13 @@ public final class FalsityConfig {
 		building.confirmAboveBlocks = clampInt(building.confirmAboveBlocks, 0, 5000);
 		building.maxDistanceFromPlayer = clampInt(building.maxDistanceFromPlayer, 4, 256);
 		building.progressUpdateTicks = clampInt(building.progressUpdateTicks, 10, 6000);
+
+		if (world.locatePermission == null) {
+			world.locatePermission = ItemPermissionMode.OWNER;
+		}
+		world.structureSearchRadiusChunks = clampInt(world.structureSearchRadiusChunks, 8, 128);
+		world.scanRadius = clampInt(world.scanRadius, 4, 48);
+		world.locateCooldownSeconds = clampInt(world.locateCooldownSeconds, 0, 600);
 	}
 
 	private static double clamp(double value, double minimum, double maximum) {

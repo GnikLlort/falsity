@@ -5,6 +5,7 @@ import com.falsity.ai.OfflineFallback;
 import com.falsity.behaviour.CompanionBehaviour;
 import com.falsity.behaviour.FollowOwnerGoal;
 import com.falsity.behaviour.PettingCooldown;
+import com.falsity.horror.HorrorEvent;
 import com.falsity.memory.PlayerMemory;
 import com.falsity.personality.PersonalityProfile;
 import net.minecraft.core.particles.ParticleTypes;
@@ -75,6 +76,13 @@ public class FalsityEntity extends PathfinderMob {
 	/** Suppresses repeated use packets from one held interaction key. */
 	private final PettingCooldown pettingCooldown = new PettingCooldown();
 	private static final int PET_COOLDOWN_TICKS = 40;
+
+	/** How often, in ticks, Falsity gets the chance to say something of its own accord. */
+	private static final int SPEAK_FIRST_CHECK_TICKS = 100;
+
+	/** Falsity only speaks first when its owner is within this many blocks (squared). */
+	private static final double SPEAK_FIRST_RANGE_SQR = 12.0 * 12.0;
+
 	/** Ticks left of the current stare at the owner (horror, harmless). */
 	private int stareTicksLeft;
 	/** Ticks left before Falsity may stare again. */
@@ -366,6 +374,11 @@ public class FalsityEntity extends PathfinderMob {
 			PlayerMemory memory = FalsityMod.memories().getOrCreate(player.getUUID(), name);
 			long daysAway = memory.daysSinceSeen(now);
 			memory.touch(now);
+			if (daysAway >= 1L) {
+				// Kept, so a conversation later the same day still knows the owner has only just come back.
+				memory.recordReturn(now, daysAway);
+				memory.addRecent(HorrorEvent.returned(now, daysAway).description(), FalsityMod.config().memory.maxRecentInteractions);
+			}
 			memory.recordPet(FalsityMod.config().memory.maxRecentInteractions);
 			FalsityMod.memories().save(player.getUUID());
 			FalsityMod.personalities().applyEvent(player.getUUID(), name, PersonalityProfile.Event.PETTED);
@@ -428,9 +441,36 @@ public class FalsityEntity extends PathfinderMob {
 
 		catchUpWithOwnerIfNeeded();
 		tickStaring();
+		tickSpeakingFirst();
 		tickCombat();
 		tickBuilds();
 		FalsityMod.expireIdleState();
+	}
+
+	/**
+	 * Every few seconds, while its owner is close, Falsity gets the chance to
+	 * say something without having been spoken to. Whether it takes the chance
+	 * is decided by the conversation manager, which keeps it rare; most of the
+	 * time nothing happens here at all.
+	 */
+	private void tickSpeakingFirst() {
+		if (this.tickCount % SPEAK_FIRST_CHECK_TICKS != 0
+			|| FalsityMod.conversations() == null || !FalsityMod.config().chat.speaksFirst) {
+			return;
+		}
+		Optional<Player> ownerOptional = getOwner();
+		if (ownerOptional.isEmpty()) {
+			return;
+		}
+		Player owner = ownerOptional.get();
+		if (owner.level() != this.level() || !owner.isAlive() || this.distanceToSqr(owner) > SPEAK_FIRST_RANGE_SQR) {
+			return;
+		}
+		try {
+			FalsityMod.conversations().offerToSpeakFirst(owner, this);
+		} catch (RuntimeException exception) {
+			FalsityMod.debug("Falsity could not take a moment to speak first: {}", exception.toString());
+		}
 	}
 
 	/** Advances the owner's active build, if one is running. */

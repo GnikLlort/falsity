@@ -37,12 +37,13 @@ That is deliberate — a mod whose entity cannot spawn is not a working mod.
 | --- | --- |
 | `./gradlew compileJava` | Compiles the common (server + shared) sources. Fastest syntax/API check. |
 | `./gradlew compileClientJava` | Compiles the client sources against the client-only Minecraft classes. |
-| `./gradlew test` | Runs the plain JUnit tests: config, Groq parsing/failures, AI validation, fallback, memory, personality, horror, cooldowns, key resolution, prompts. |
+| `./gradlew test` | Runs the plain JUnit tests: config, the Groq client (scripted, and over real HTTP against a local server), reply parsing, prompts, pacing, offline replies, intent recognition, item requests, world questions, memory, personality, horror, key resolution. |
+| `GROQ_API_KEY=gsk_... ./gradlew test --tests '*GroqLiveTest*'` | Asks the real Groq service with the default settings. Without the variable these two tests are skipped. |
 | `./gradlew runGameTest` | Runs the game tests in a headless dedicated server. |
 | `./gradlew build` | Everything above, plus the jar. |
 | `./gradlew runClient` | Development client, with the mod loaded. |
 | `./gradlew runServer` | Development dedicated server. |
-| `python3 scripts/report_test_failures.py build/test-results/test` | Names the failing unit tests from the JUnit XML reports. |
+| `python3 scripts/report_test_failures.py build/test-results/test` | Names the failing and the skipped unit tests from the JUnit XML reports. |
 
 `./gradlew tasks` lists the rest.
 
@@ -142,17 +143,40 @@ Rules for adding settings:
    does nothing is a lie in a config file.
 2. Clamp it in `sanitise()` and cover the clamp with a unit test.
 3. Never put secrets in this file. See below.
+4. When a setting is added, raise `FalsityConfig.CURRENT_VERSION` so existing
+   files are rewritten with it, and regenerate `docs/falsity.example.json`
+   (a test compares that file with the defaults).
+
+### The personality file
+
+Who Falsity is lives in a second file, `config/falsity/personality.txt`, read
+by `PersonalityPromptStore`. It is plain text because prose in JSON is
+miserable to edit. The default text ships as a resource,
+`src/main/resources/falsity/personality.default.txt`; that file is both what is
+written out on first start and what is used when the owner's file is unusable.
+Edit the default there, not in Java. [PERSONALITY.md](PERSONALITY.md) is the
+user-facing description.
+
+The prompt text that is not the owner's to change is in three places, each with
+tests that pin what it must and must not say: the rules in `PromptBuilder`, the
+horror voices in `StageDirections`, and the wording of the relationship in
+`RelationshipState`. None of them contains a line for Falsity to recite, and
+`NoCannedDialogueTest` keeps it that way.
 
 ## Secrets and Groq setup
 
 The Groq API key is resolved by `ApiKeyProvider` in this order (first
-non-empty wins):
+usable one wins):
 
 1. the `GROQ_API_KEY` environment variable (recommended for servers),
-2. `secrets.json` in the game directory — copy `docs/secrets.example.json`,
-   replace the placeholder, and keep it out of git (`.gitignore` already
-   excludes `secrets.json`),
+2. a file named exactly `secrets.json` in the game directory, or in its
+   `config/` folder — copy `docs/secrets.example.json`, replace the
+   placeholder, and keep it out of git (`.gitignore` already excludes
+   `secrets.json`),
 3. the `groq.apiKey` field in `config/falsity.json` (ships empty).
+
+In a development run (`./gradlew runClient` / `runServer`) the game directory
+is `run/`, so the file is `run/secrets.json`.
 
 The key is never logged, never written back to disk by the mod, never sent to
 a client, and never included in error messages. All API calls happen
@@ -161,27 +185,65 @@ scheduled back onto the server thread before any game state is touched.
 
 **How to get a key:** create a free account at <https://console.groq.com>,
 open *API Keys*, and create a key. The default model is `openai/gpt-oss-20b`;
-Groq retires models without much notice, so if replies stop arriving, check
-the console for the current model list and update `groq.model` in
-`config/falsity.json`. A full annotated example is in
-`docs/falsity.example.json`.
+Groq retires models without much notice, and when that happens
+`/falsity ai test` reports `MODEL_UNAVAILABLE`: pick a current model in the
+console and update `groq.model` in `config/falsity.json`. Every setting,
+every failure and its fix are in [GROQ.md](GROQ.md).
 
-**Manual test with a real key (never automated):**
+**Checking a real key.** There are two ways, and they send the same request:
 
-1. Set the key via one of the three methods above, then start the server.
-2. Summon and bond Falsity, stand within 16 blocks, and run
-   `/falsity talk Hello, Falsity!`. A reply should arrive within a few
-   seconds, prefixed with `<Falsity>`.
-3. Run `/falsity talk remember my favourite block is diamonds`, then talk
-   again about diamonds: Falsity should refer back to it.
-4. Run `/falsity memory` and `/falsity personality` to inspect what it kept.
+- In game: `/falsity ai test` (operator). One line comes back: `Groq works. It
+  answered "..."`, or the failure, its cause and what to do.
+  `/falsity ai status` shows where the key was found and the last success and
+  failure.
+- From Gradle: `GROQ_API_KEY=gsk_... ./gradlew test --tests '*GroqLiveTest*'`.
+  The tests fail if Groq refuses the key, the model or the request, or answers
+  with nothing; they are skipped (and say so) if there is no key, no network,
+  or Groq is busy.
+
+Then try it for real:
+
+1. Summon and bond Falsity, stand near it, and say `Falsity, how are you?` in
+   chat. A reply should arrive within a few seconds, prefixed with `<Falsity>`.
+2. Say `remember my favourite block is diamonds`, then talk again about
+   diamonds: Falsity should refer back to it.
+3. Run `/falsity memory` and `/falsity personality` to inspect what it kept,
+   which personality text is in use and which voice the horror stage gives it.
+4. Open `config/falsity/personality.txt`, change a sentence, save, and talk
+   again: the reply should follow the new text. `/falsity personality reload`
+   reports what was loaded.
+
+Setting `debugLogging` to `true` in the config logs at INFO how each message
+was dealt with: handled locally as an order, queued, answered offline (and
+why), or answered by Groq, with that request's status, timing and token usage.
+For a Groq turn it also logs the size of each layer of the prompt, which
+personality is in use and which voice; never any of the text.
+Failures are logged at WARN whether or not it is on.
 
 **Testing offline fallback:** set `groq.enabled` to `false` in
-`config/falsity.json` (or leave the key empty) and repeat step 2. Falsity
-answers from scripted lines with no network involved. To test failure paths
-without a real key, the unit tests stub the HTTP transport
-(`GroqClientTest`): timeouts, 429s, 5xx, malformed bodies and missing keys
-all map to the fallback.
+`config/falsity.json` (or leave the key empty), run `/falsity reload`, and
+talk. Falsity answers from scripted lines with no network involved; orders,
+item requests and world questions work exactly as before.
+
+**Testing failure paths** needs no key. `GroqClientDiagnosticsTest` and
+`GroqClientNetworkTest` script the transport: every status, every network
+failure, every retry. `GroqHttpTransportTest` starts an HTTP server on
+`127.0.0.1` and lets the client's real HTTP code talk to it, so the bytes on
+the wire, a real timeout, a refused connection and a dropped connection are
+covered too. `FalsityGroqPipelineGameTest` scripts the network inside a real
+Minecraft server and follows a chat message all the way to the reply, the
+action and the memory.
+
+**Testing the personality system** needs no key either. `PersonalitySystemTest`
+builds everything the mod builds at start-up (the personality file, the memory,
+personality and horror managers over real files, the prompt, the Groq client)
+and records what would have been sent. It is where "the personality reaches
+Groq", "every stage sends its own voice", "changing the personality does not
+reset horror progress" and "a restart changes nothing" are proved.
+`FalsityPersonalityGameTest` and `FalsitySpeaksFirstGameTest` repeat the
+essentials on a real server. To hear a later stage's voice by hand, note that
+`/falsity horror set` only holds until the player's next interaction unless
+tension has reached that stage, and that the settings cap the stage at 1.
 
 ## How CI verifies the mod
 
@@ -203,23 +265,34 @@ gh api repos/<owner>/<repo>/commits/$(git rev-parse HEAD)/comments --jq '.[].bod
 What a green run proves:
 
 - both source sets compile against real 26.3 classes,
-- the pure logic tests pass (Groq parsing/failures, AI validation, fallback,
-  memory, personality, horror, cooldowns, key resolution, prompts, config,
-  natural-chat detection, offline intent recognition, action allowlist +
-  executor routing, confirmation flow, warm-context tracking, item-name
-  normalisation, build progress),
+- the pure logic tests pass (the Groq client and its failure handling, reply
+  parsing, prompts, pacing, offline replies, intent recognition, item
+  requests against the full vanilla item list, world questions, memory,
+  personality, horror, key resolution, config and its migration, natural-chat
+  detection, the action allowlist and executor, confirmations, build progress),
+- the Groq client's real HTTP code works against a local server,
 - a real dedicated server loads the mod, spawns Falsity, ticks it, bonds it to a
   player, obeys sit/follow, measures it walking towards its owner, creates and
-  persists memory, evolves personality, caps horror progression, and answers
-  conversations offline.
+  persists memory, evolves personality, caps horror progression, hands over
+  exactly the items asked for, answers world questions from the world, and
+  carries whole conversations from chat message to reply with a scripted
+  network.
+
+What a green run does **not** prove: that the real Groq service accepts the
+request. `GroqLiveTest` checks that, and it only runs when the repository has
+an Actions secret named `GROQ_API_KEY` (*Settings → Secrets and variables →
+Actions*). Without the secret the two live tests are **skipped**, and the
+commit comment lists them under "unit tests that did not run" with the reason,
+so a skipped check is never mistaken for a passed one.
 
 When a unit test fails, CI names it. `scripts/report_test_failures.py` reads
-the JUnit XML reports and prints the failing class, method and message, and
-that output is included in the commit comment alongside the counts. A build
+the JUnit XML reports and prints the failing class, method and message (and
+every skipped test with its reason), and that output is included in the commit
+comment alongside the counts. A build
 that says "81 tests completed, 2 failed" is not a useful report; "FAILED
 com.falsity.memory.PlayerMemoryTest.daysSinceSeenCountsCorrectly" is.
 
-What it does **not** prove: how the mob looks. Rendering needs a client, so the
+It also does not prove how the mob looks. Rendering needs a client, so the
 visual check is `./gradlew runClient` plus the generated preview, and the
 `docs/images/falsity_model_preview.png` sheet in the README.
 
@@ -297,29 +370,46 @@ and they are what the code relies on:
 ## Known limitations (Milestone 3)
 
 - Groq models are retired without much notice. If conversations stop working
-  but offline lines still arrive, check the model id in the Groq console.
+  but offline lines still arrive, run `/falsity ai test`: it names the cause
+  (`MODEL_UNAVAILABLE` for a retired model).
+- The request to Groq follows Groq's published API, and every refusal has a
+  tested fallback, but no automated run has talked to the real service unless
+  a `GROQ_API_KEY` secret is configured. See "What a green run does not prove"
+  above.
+- Recognising orders and questions in plain chat is rule-based. The tables in
+  `IntentConversationTest` and `WorldQueryRecognizerTest` show where the lines
+  are drawn; a phrasing outside them is treated as conversation, which with
+  Groq still usually ends in the right action, and without Groq does not.
+- Ore and cave answers only cover chunks that are loaded around the player.
 - Memory is per-server-installation (`<gameDir>/falsity-memory/`), not
   per-world-save: on an integrated server shared across worlds, a player's
   memory follows them between worlds. On a dedicated server (one world per
   install) this is equivalent to per-world.
 - Fact extraction is simple pattern matching (`my name is...`, `i like...`,
-  `remember...`). It is not NLP and will miss phrasings it does not know.
-- Horror is capped at Strange: staring and odd recollections only. The
-  director, stalking and transformation are later milestones.
+  `i'm building...`, `my base is...`, `remember...`; see `FactExtractor`). It
+  is not NLP and will miss phrasings it does not know.
+- Horror is capped at Strange: staring, odd recollections and the "unusual"
+  voice only. The voices for the three later stages exist and are tested, but
+  nothing can reach them until the cap is raised. The director, stalking and
+  transformation are later milestones.
+- How a model follows the personality and the stage directions has not been
+  checked against the real Groq service. The tests prove what is sent, not how
+  it is answered.
+- The personality file shapes what Groq says. The offline lines were written in
+  advance, in the default personality's voice, and a custom personality cannot
+  change them.
+- "How the player treats Falsity" means words, pets and absences. Hitting it is
+  not noticed.
+- Speaking first needs Groq. Offline, Falsity only ever answers.
+- The prompt is about twice the size it was before 0.3.0 (roughly 1,000 tokens
+  of system text per message). On a metered or free Groq plan that halves how
+  far the same allowance goes.
 - Item assistance resolves vanilla `minecraft:` ids only; modded items are not
   looked up. The name is normalised (plural/synonym/case) but a modded item id
   will not resolve.
 - Building places whole blocks from a small structure library (house, castle,
   wall, fence, farm, platform, tower, …). It is not a general-purpose schematic
   importer.
-- **Build status on this branch:** the sandbox that produced this branch has no
-  access to the Maven/Fabric dependency repositories and no `javac`, so
-  `./gradlew build` could not be run here. The source is syntactically valid and
-  the pure-logic classes were reviewed against the 26.3 API notes above; the
-  unit tests in `src/test` cover the new pure logic (chat detection, intent
-  recognition, the action allowlist/executor, confirmations, warm context,
-  item-name normalisation, build progress). Run `./gradlew build` in an
-  environment with the dependencies reachable to produce and verify the jar.
 - No sounds yet: Falsity is silent apart from chat lines.
 
 ## Style

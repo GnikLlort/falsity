@@ -43,6 +43,16 @@ public enum ActionType {
 	REPORT_THREATS,
 	/** Create an item stack and hand it to the player. */
 	GIVE_ITEM("item", "count"),
+	/**
+	 * Several items in one request. {@code items} is a plain list such as
+	 * {@code "1 crafting table, 64 sticks"}; the server parses and validates it.
+	 */
+	GIVE_ITEMS("items"),
+	/**
+	 * A question about the world ("nearest village", "where am i"). The server
+	 * looks the answer up; nothing is taken from the model.
+	 */
+	WORLD_QUERY("query"),
 	/** Build a structure in the world. */
 	BUILD("structure", "material", "width", "length", "height", "x", "y", "z"),
 	/** Cancel the active build for the player. */
@@ -65,6 +75,11 @@ public enum ActionType {
 			return true;
 		}
 		return args.keySet().stream().allMatch(this::allowsArg);
+	}
+
+	/** Whether the action needs to be told something (an item, a place) to mean anything. */
+	public boolean takesArgs() {
+		return !this.allowedArgs.isEmpty();
 	}
 
 	/** Whether this type is a real action rather than the "nothing" placeholder. */

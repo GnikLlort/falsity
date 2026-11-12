@@ -140,6 +140,86 @@ Delivered (on the `arena/10942be9-falsity` branch):
 Not in this milestone: sounds, networking spine, horror escalation,
 transformation, stalking, jumpscares.
 
+### 0.2.2 — making M3 dependable
+
+No new feature area: the same companion, made to do what it was already
+supposed to do. Each item below was a reported or found defect.
+
+- **Falsity repeated itself.** Offline lines ignored what the player said.
+  They now answer the kind of message (greeting, question, thanks, feeling) and
+  never repeat the previous line; with Groq, the last few exchanges are sent
+  along so replies stay on topic.
+- **Groq was silent and nobody could tell why.** Failures were swallowed and
+  the startup log claimed a connection it had never made. Every failed request
+  is now logged with its cause and the fix; `/falsity ai status` and
+  `/falsity ai test` report what is configured and what has actually been
+  observed. The request for reasoning models (`openai/gpt-oss-*`) reserves room
+  for thinking, which the old fixed `max_tokens` did not, and an empty reply is
+  retried with more room. Keys in the wrong place or shape are found or named.
+  A wrong `groq.endpoint`, a refusal on the way (403) and each kind of network
+  failure are told apart from a bad key. See [GROQ.md](GROQ.md).
+- **Messages were dropped during the cooldown.** They now wait their turn.
+  Orders, item requests and world questions never wait and never need Groq.
+- **Item requests collapsed to one item.** "A crafting table and 64 sticks"
+  delivers both, in the amounts asked for. Unknown names are reported, never
+  replaced; limits refuse the whole request and say which limit. A count the
+  model sent as a JSON number used to be read as 1.
+- **Words anywhere in a sentence triggered actions.** A command must start its
+  clause; plans, feelings, stories and idioms are conversation.
+- **Falsity could not say where anything is, or made it up.** Questions about
+  position, biome, time, weather, structures, ores and caves are answered by
+  the server from the world. The model is given those facts and no others, and
+  a reply that states coordinates it was not given is discarded. Coordinates
+  respect `world.shareCoordinates` and the `reducedDebugInfo` game rule.
+- **Settings that did nothing or said the wrong thing.** Old config files keep
+  their owner's choices while outdated defaults move forward (`configVersion`);
+  `autonomy.exploration` and `autonomy.resourceAssistance` now do what they say.
+
+Verification: 482 unit tests and 35 game tests in CI. Still unverified by any
+automated run: the real Groq service accepting the request, which needs a key
+(`GroqLiveTest` runs when one is provided and is reported as skipped
+otherwise), and anything visual.
+
+### 0.3.0 — a personality of its own
+
+Falsity gets a personality that can be read, edited and reloaded, and the
+horror progression gets a voice. See [PERSONALITY.md](PERSONALITY.md).
+
+- **A personality file.** `config/falsity/personality.txt` is created with a
+  default and sent with every conversation. Saving it is enough for the next
+  reply to use it; `/falsity personality reload` and `/falsity reload` do it on
+  demand. A missing, empty or unreadable file falls back to the built-in
+  default and is left untouched.
+- **A layered prompt.** Rules, personality, horror stage, relationship, memory,
+  world, then the conversation and the message, each layer with its own bound
+  so none crowds out another.
+- **A voice for every horror stage.** The stage still comes from the horror
+  system alone. Each of its five stages now has directions for how the
+  personality shows, written as a change to the expression and never as a new
+  character. `horror.allowUnsettlingLines`, which nothing read, now keeps the
+  voice at the first stage when off. The cap stays at Strange; the three later
+  voices wait for M4 to raise it.
+- **Falsity knows where it stands with you.** How long you have known each
+  other, how often you have talked and petted, how it feels, how long you were
+  away and whether your recent words were kind or harsh are all told to the
+  model, and all read off what is counted. A return after days away used to go
+  unnoticed unless the first thing you did was pet it.
+- **It remembers more of what you tell it about yourself**, picks up where the
+  last conversation left off after a restart, and is told when you are hurt or
+  hostile mobs are close.
+- **It can speak first**, rarely, to its owner, with Groq only. This ends the
+  rule from M2 that Falsity only speaks when spoken to; `chat.speaksFirst`
+  restores it.
+- **Fewer remarks taken for questions.** "I like this time of day" and "let me
+  look around" are conversation, and a follow-up that calls another player by
+  name is left alone.
+
+Verification: 663 unit tests and 55 game tests in CI. Still unverified by any
+automated run: how a real model follows the personality and the stage
+directions, and whether the larger prompt (about 1,000 tokens of system text
+per message, roughly twice the previous size) fits comfortably inside a given
+Groq plan's limits.
+
 ---
 
 ## M3 — Presence and a networking spine
@@ -177,7 +257,9 @@ Planned:
 - Each stage changes behaviour, sound, animation and dialogue *policy* — not
   just text. Stage transitions are logged for debugging and configurable
   (including turning escalation off entirely). Raise the `maxStage` cap beyond
-  1 when this milestone lands.
+  1 when this milestone lands. The dialogue side is already in place: since
+  0.3.0 every stage has its own voice in `StageDirections`, so raising the cap
+  is all it takes for conversation to follow.
 - Multiplayer-safe by design: the director is server-authoritative and per
   player, and a scare aimed at one player never overrides another's stage.
 - A `/falsity stage` admin command for testing every stage on demand (the

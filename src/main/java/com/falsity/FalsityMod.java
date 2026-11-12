@@ -16,6 +16,9 @@ import com.falsity.actions.companion.StopFightActionHandler;
 import com.falsity.actions.companion.StopFollowActionHandler;
 import com.falsity.actions.companion.WalkToActionHandler;
 import com.falsity.actions.items.GiveItemHandler;
+import com.falsity.actions.items.GiveItemsHandler;
+import com.falsity.actions.items.ItemAssistance;
+import com.falsity.actions.items.ItemService;
 import com.falsity.ai.ApiKeyProvider;
 import com.falsity.ai.ConversationManager;
 import com.falsity.ai.GroqClient;
@@ -31,8 +34,14 @@ import com.falsity.horror.HorrorManager;
 import com.falsity.memory.MemoryManager;
 import com.falsity.memory.MemoryStorage;
 import com.falsity.personality.PersonalityManager;
+import com.falsity.personality.PersonalityPrompt;
+import com.falsity.personality.PersonalityPromptStore;
+import com.falsity.world.WorldQueryHandler;
+import com.falsity.world.WorldService;
 import java.nio.file.Path;
+import java.util.Optional;
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.resources.Identifier;
 import org.slf4j.Logger;
@@ -41,9 +50,10 @@ import org.slf4j.LoggerFactory;
 /**
  * Entry point of the Falsity mod.
  *
- * <p>Initialisation order matters: the configuration is read first, then the
- * registries are populated, then the intelligence managers (memory,
- * personality, horror, conversation) are wired, then commands are hooked in.
+ * <p>Initialisation order matters: the configuration and the personality file
+ * are read first, then the registries are populated, then the intelligence
+ * managers (memory, personality, horror, conversation) are wired, then commands
+ * are hooked in.
  * Nothing here talks to a network or to a client, so the integrated and
  * dedicated servers follow the same path.
  */
@@ -54,6 +64,7 @@ public class FalsityMod implements ModInitializer {
 	private static FalsityConfig config = new FalsityConfig();
 	private static MemoryManager memories;
 	private static PersonalityManager personalities;
+	private static PersonalityPromptStore personalityPrompts = PersonalityPromptStore.builtIn();
 	private static HorrorManager horror;
 	private static ConversationManager conversations;
 	private static ActionExecutor actions;
@@ -66,6 +77,11 @@ public class FalsityMod implements ModInitializer {
 	public void onInitialize() {
 		gameDir = FabricLoader.getInstance().getGameDir();
 		config = FalsityConfig.load(FabricLoader.getInstance().getConfigDir().resolve("falsity.json"));
+		// Read at start-up, so config/falsity/personality.txt exists before anyone
+		// goes looking for it and the log says which personality is in use.
+		personalityPrompts = new PersonalityPromptStore(
+			PersonalityPromptStore.fileIn(FabricLoader.getInstance().getConfigDir()));
+		personalityPrompts.load();
 
 		FalsityRegistries.initialize();
 
@@ -105,11 +121,24 @@ public class FalsityMod implements ModInitializer {
 		executor.register(new FightActionHandler());
 		executor.register(new StopFightActionHandler());
 		executor.register(new ReportThreatsActionHandler());
-		executor.register(new GiveItemHandler());
+		ItemService itemService = new ItemService();
+		executor.register(new GiveItemHandler(itemService));
+		executor.register(new GiveItemsHandler(itemService));
+		executor.register(new WorldQueryHandler());
 		executor.register(new BuildActionHandler());
 		executor.register(new StopBuildActionHandler());
 
 		conversations.setActionExecutor(executor);
+		conversations.setConfigSource(FalsityMod::config);
+		conversations.setItemCatalog(ItemAssistance.CATALOG);
+		conversations.setWorldFacts((player, falsity) -> WorldService.facts(player, falsity, config));
+		conversations.setPersonalityPrompts(personalityPrompts);
+		// When Falsity has spoken first, the player's next message is an answer to it, name or no name.
+		conversations.setSpokeFirstListener((player, falsity) -> {
+			if (contexts != null) {
+				contexts.activate(player.getUUID(), falsity.getUUID());
+			}
+		});
 
 		actions = executor;
 		confirmations = confirmationManager;
@@ -117,17 +146,68 @@ public class FalsityMod implements ModInitializer {
 		contexts = contextManager;
 
 		NaturalChatListener.register();
+		// Waiting messages are released here, so they are answered (or dropped
+		// with a log line) even if the companion they were said to is gone.
+		ServerTickEvents.END_SERVER_TICK.register(server -> expireIdleState());
 
-		boolean groqReady = config.groq.enabled && new ApiKeyProvider().resolve(config, gameDir).isPresent();
 		LOGGER.info(
-			"Falsity ready ({} companions registered, debug logging {}, Groq {}).",
-			FalsityRegistries.FALSITY == null ? "no" : "one",
+			"Falsity ready (companion {}, debug logging {}). {}",
+			FalsityRegistries.FALSITY == null ? "not registered" : "registered",
 			config.debugLogging ? "on" : "off",
-			groqReady ? "connected (" + config.groq.model + ")" : "offline (fallback lines)"
+			describeGroqSetup()
 		);
 	}
 
-	/** Namespaced identifier for this mod's resources. */
+	/**
+	 * What is known about Groq at startup. A key being present does not prove
+	 * that Groq works, so this never says "connected": it says what is
+	 * configured and how to check.
+	 */
+	private static String describeGroqSetup() {
+		if (!config.groq.enabled) {
+			return "Groq is disabled in the config; Falsity will use its offline lines.";
+		}
+		ApiKeyProvider.Located key = new ApiKeyProvider().locate(config, gameDir);
+		if (!key.present()) {
+			return "No Groq API key was found" + (key.note().isEmpty() ? "" : " (" + key.note() + ")")
+				+ "; Falsity will use its offline lines. Set the GROQ_API_KEY environment variable, or put the key in "
+				+ key.secretsPath() + ", or in groq.apiKey in config/falsity.json.";
+		}
+		return "Groq is configured (model " + config.groq.model + ", key from " + key.source().description()
+			+ ") but not yet verified; run /falsity ai test to check it, and /falsity ai status to see results.";
+	}
+
+	/**
+	 * Re-reads {@code config/falsity.json} and applies it in place. Returns an
+	 * empty string on success, or a sentence explaining what went wrong; on
+	 * failure the running settings are left as they were.
+	 */
+	public static String reloadConfig() {
+		Path path = FabricLoader.getInstance().getConfigDir().resolve("falsity.json");
+		Optional<FalsityConfig> loaded = FalsityConfig.read(path);
+		if (loaded.isEmpty()) {
+			return "Could not read " + path.getFileName() + "; the current settings were kept. See the server log.";
+		}
+		config.copyFrom(loaded.get());
+		LOGGER.info("Falsity settings reloaded. {}", describeGroqSetup());
+		return "";
+	}
+
+	/**
+	 * Re-reads {@code config/falsity/personality.txt} now and returns what
+	 * Falsity will use from here on. Never fails: an unusable file gives the
+	 * built-in default and a note saying why. Players' memories, personality
+	 * values and horror stages are not touched.
+	 */
+	public static PersonalityPrompt reloadPersonality() {
+		return personalityPrompts.load();
+	}
+
+	/** Falsity's personality text: where it is read from and what is in use. */
+	public static PersonalityPromptStore personalityPrompts() {
+		return personalityPrompts;
+	}
+
 	public static Identifier id(String path) {
 		return Identifier.fromNamespaceAndPath(MOD_ID, path);
 	}
@@ -194,6 +274,10 @@ public class FalsityMod implements ModInitializer {
 		}
 		if (confirmations != null) {
 			confirmations.expire();
+		}
+		if (conversations != null) {
+			// Releases messages that were waiting for their turn.
+			conversations.tick();
 		}
 	}
 
